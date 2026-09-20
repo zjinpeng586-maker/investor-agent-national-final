@@ -90,9 +90,19 @@ def test_qa_period_answer_data_compare_and_header_stay_in_sync():
     assert set(compare_tables[0]['企业']) == {'比亚迪股份有限公司', '宁德时代新能源科技股份有限公司'}
 
     app = AppTest.from_file(APP_PATH, default_timeout=20).run()
+    assert app.session_state.selected_main == '比亚迪股份有限公司'
+    assert app.session_state.selected_cmp == '宁德时代新能源科技股份有限公司'
     _widget_by_label(app.selectbox, '当前理解企业').set_value('宁德时代新能源科技股份有限公司').run()
     header_html = '\n'.join(item.value for item in app.markdown if 'context-bar' in item.value)
     assert '当前企业：宁德时代新能源科技股份有限公司' in header_html
+    assert app.session_state.selected_cmp != app.session_state.selected_main
+    compare_button = next(button for button in app.button if '核心指标对比' in button.label)
+    assert '宁德时代新能源科技股份有限公司' in compare_button.label
+    assert app.session_state.selected_cmp in compare_button.label
+    compare_button.click().run()
+    compare_tables = [table.value for table in app.dataframe if '企业' in table.value.columns]
+    assert compare_tables
+    assert len(set(compare_tables[0]['企业'])) == 2
 
     app.radio[0].set_value('企业分析').run()
     _widget_by_label(app.selectbox, '分析企业').set_value('比亚迪股份有限公司').run()

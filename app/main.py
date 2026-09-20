@@ -731,7 +731,10 @@ def main() -> None:
     if active_selector and st.session_state.get(active_selector) in analysis_names:
         st.session_state.selected_main = st.session_state[active_selector]
     selected_main = st.session_state.selected_main
-    selected_cmp = st.session_state.selected_cmp
+    selected_cmp = st.session_state.get('selected_cmp')
+    if selected_cmp not in analysis_names or (selected_cmp == selected_main and len(analysis_names) > 1):
+        selected_cmp = next((name for name in analysis_names if name != selected_main), selected_main)
+        st.session_state.selected_cmp = selected_cmp
     main_df = data_map[selected_main]
     render_header(st.session_state.page, selected_main, main_df)
 
