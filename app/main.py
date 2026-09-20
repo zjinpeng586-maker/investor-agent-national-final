@@ -315,7 +315,12 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
     question, result = item['question'], item['result']
     company = result.get('company')
     parsed = result.get('parsed') or {}
-    df = filter_result_data(data_map.get(company, pd.DataFrame()), parsed)
+    sql_result = result.get('sql_result') or {}
+    sql_rows = pd.DataFrame(sql_result.get('rows') or [])
+    if sql_result.get('status') == 'success' and not sql_rows.empty:
+        df = sql_rows[sql_rows['company'] == company].drop(columns=['company'], errors='ignore')
+    else:
+        df = filter_result_data(data_map.get(company, pd.DataFrame()), parsed)
     metrics = parsed.get('metrics') or ['revenue', 'net_profit', 'operating_cashflow']
     compare_company = None
     if parsed.get('intent') == 'company_compare':
@@ -333,7 +338,11 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
         tab_chart, tab_data, tab_evidence = st.tabs(['图表', '数据', '依据'])
         with tab_chart:
             if compare_company:
-                compare_df = comparison_result_data(company, compare_company, data_map, parsed)
+                if sql_result.get('status') == 'success' and not sql_rows.empty:
+                    compare_df = sql_rows.rename(columns={'company': '企业', 'year': '年度', **METRIC_LABELS})
+                    compare_df = compare_df.drop(columns=['raw_source'], errors='ignore')
+                else:
+                    compare_df = comparison_result_data(company, compare_company, data_map, parsed)
                 value_columns = [column for column in compare_df.columns if column not in ['企业', '年度']]
                 long_df = compare_df.melt(
                     id_vars=['企业', '年度'], value_vars=value_columns, var_name='指标', value_name='数值'
@@ -352,7 +361,11 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
                     st.info('当前问题对应的数据不足以生成趋势图。')
         with tab_data:
             if compare_company:
-                compare_df = comparison_result_data(company, compare_company, data_map, parsed)
+                if sql_result.get('status') == 'success' and not sql_rows.empty:
+                    compare_df = sql_rows.rename(columns={'company': '企业', 'year': '年度', **METRIC_LABELS})
+                    compare_df = compare_df.drop(columns=['raw_source'], errors='ignore')
+                else:
+                    compare_df = comparison_result_data(company, compare_company, data_map, parsed)
                 if compare_df.empty:
                     st.info('两家企业当前没有可展示的结构化指标。')
                 else:
@@ -374,11 +387,26 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
         with st.expander('查询过程'):
             st.write(f'1. 已识别任务：{parsed.get("intent", "unknown")}')
             st.write(f'2. 已识别企业与期间：{company} / {years}')
-            st.write('3. 已从结构化财务数据层读取并校验可用记录')
-            st.write('4. 已核对规则依据与来源记录')
+            if sql_result.get('sql_status') in {'success', 'fallback'}:
+                source_label = {
+                    'local': '本地规则', 'local_repair': '本地规则自动修复', 'llm': '云端模型'
+                }.get(sql_result.get('source'), sql_result.get('source', '未知'))
+                st.write(f'3. SQL 来源：{source_label}')
+                st.code(sql_result.get('sql', ''), language='sql')
+                st.write(f'参数：{sql_result.get("params", [])}')
+                st.write(f'安全校验：{"通过" if sql_result.get("safety_status") == "passed" else "未通过"}')
+                st.write(f'执行状态：{"成功" if sql_result.get("execution_status") == "success" else "回退"}')
+                st.write(f'返回行数：{sql_result.get("row_count", 0)}')
+                st.write(f'自动纠错：{"是" if sql_result.get("corrected") else "否"}')
+                st.markdown('**执行尝试**')
+                st.dataframe(pd.DataFrame(sql_result.get('attempts') or []), width='stretch', hide_index=True)
+            else:
+                st.write('3. 当前任务沿用 V1.0 可信分析链路，不适用结构化 SQL 查询。')
+            st.write('4. 已核对查询结果、规则依据与来源记录')
             if result.get('agent_trace'):
                 st.dataframe(pd.DataFrame(result['agent_trace']), width='stretch', hide_index=True)
-            st.caption('Phase 1 沿用 V1.0 可信查询链路；Text-to-SQL 与自动纠错将在后续阶段接入。')
+            if sql_result.get('sql_status') == 'fallback':
+                st.warning('Text-to-SQL 未完成有效查询，本次已明确回退到 V1.0 可信数据路径。')
 
 
 def render_qa_page(selected_main, selected_cmp, all_names, data_map, name_to_id, llm_config):
@@ -750,14 +778,14 @@ def render_data_center(companies, name_to_id, data_map):
 
 def render_evaluation_page():
     st.markdown('### 系统评测状态')
-    st.caption('评测中心只展示真实可核验状态；Phase 2 多轮上下文与条件澄清已有自动化检查，尚未建立正式准确率评测，因此不展示百分比。')
+    st.caption('Phase 2 多轮与澄清、Phase 3 Text-to-SQL 安全执行与纠错均已有自动化检查；正式准确率与性能 Benchmark 留待 Phase 5，因此当前不展示百分比。')
     rows = [
         {'评测维度': '五页面信息架构', '当前状态': '本阶段可检查', '依据': '页面导航与启动冒烟测试'},
         {'评测维度': 'V1.0 核心能力回归', '当前状态': '本阶段可检查', '依据': '自动化与人工回归结果'},
         {'评测维度': '查询准确性', '当前状态': '待建立标准测试集', '依据': 'Phase 5'},
         {'评测维度': '多轮上下文', '当前状态': '本阶段可检查', '依据': 'Phase 2 自动化多轮测试'},
         {'评测维度': '条件澄清', '当前状态': '本阶段可检查', '依据': 'Phase 2 澄清与恢复测试'},
-        {'评测维度': 'Text-to-SQL 与纠错', '当前状态': '待后续接入', '依据': 'Phase 3'},
+        {'评测维度': 'Text-to-SQL 与纠错', '当前状态': '本阶段可检查', '依据': 'Phase 3 SQL 生成、安全校验、执行与纠错自动化测试'},
         {'评测维度': '研报 RAG', '当前状态': '待后续接入', '依据': 'Phase 4'},
     ]
     st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
