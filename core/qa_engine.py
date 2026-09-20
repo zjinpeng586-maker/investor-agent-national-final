@@ -18,6 +18,7 @@ from core.analysis import (
 )
 from core.llm import llm_enabled, parse_question_with_llm, polish_answer_with_llm
 from core.agents import build_agent_trace, agent_trace_text
+from core.text_to_sql import run_text_to_sql
 
 KEYWORDS = {
     'revenue': ['营业收入', '营收', '收入', 'revenue'],
@@ -182,7 +183,24 @@ def answer_question(
     if secondary is None and selected_compare in data_map and selected_compare != primary:
         secondary = selected_compare
 
-    df = _company_data(primary, data_map)
+    query_data_map = data_map
+    sql_result: dict[str, Any] = {
+        'status': 'not_applicable', 'sql_status': 'not_applicable', 'attempts': [], 'rows': [],
+    }
+    if intent in {'finance_query', 'trend_analysis', 'company_compare'}:
+        sql_result = run_text_to_sql(parsed)
+        if sql_result['status'] == 'success':
+            sql_df = pd.DataFrame(sql_result['rows'])
+            query_data_map = {}
+            for company_name in companies[:2]:
+                company_rows = sql_df[sql_df['company'] == company_name].drop(columns=['company'], errors='ignore')
+                query_data_map[company_name] = company_rows.reset_index(drop=True)
+        else:
+            sql_result['sql_status'] = 'fallback'
+
+    df = _company_data(primary, query_data_map)
+    if df.empty and sql_result.get('sql_status') == 'fallback':
+        df = _company_data(primary, data_map)
     alerts = compute_alerts(df)
     draft = ''
     evidence_extra = ''
@@ -199,8 +217,8 @@ def answer_question(
         if df is not None and not df.empty and metrics:
             draft += '\n\n' + metric_query(primary, df, metric, years[0] if years else None)
     elif intent == 'finance_query':
-        metric = metrics[0] if metrics else 'net_profit'
-        draft = metric_query(primary, df, metric, years[0] if years else None)
+        query_metrics = metrics or ['net_profit']
+        draft = '\n'.join(metric_query(primary, df, metric, years[0] if years else None) for metric in query_metrics)
     elif intent == 'trend_analysis':
         metric = metrics[0] if metrics else 'revenue'
         draft = trend_text(primary, df, metric)
@@ -213,7 +231,10 @@ def answer_question(
         if secondary is None or secondary == primary:
             draft = '当前没有可用于对比的第二家企业，请在左侧选择对比企业，或上传新的企业结构化财务数据。'
         else:
-            cmp = compare_companies(primary, df, secondary, _company_data(secondary, data_map), investor_profile)
+            secondary_df = _company_data(secondary, query_data_map)
+            if secondary_df.empty and sql_result.get('sql_status') == 'fallback':
+                secondary_df = _company_data(secondary, data_map)
+            cmp = compare_companies(primary, df, secondary, secondary_df, investor_profile)
             draft = cmp['reasoning'] + '\n评分拆解：\n' + cmp['score_table'].to_string(index=False)
             evidence_extra = '企业对比评分依据：\n' + '\n'.join([f'{k}：' + '；'.join(v) for k, v in cmp['basis'].items()])
     elif intent == 'report_generate':
@@ -250,4 +271,6 @@ def answer_question(
         'model_used': model_used,
         'company': primary,
         'agent_trace': agent_trace,
+        'sql_result': sql_result,
+        'sql_status': sql_result.get('sql_status', 'not_applicable'),
     }
