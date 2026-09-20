@@ -36,6 +36,9 @@ def test_evaluation_page_does_not_claim_unrun_metrics():
     assert evaluation.loc['条件澄清', '依据'] == 'Phase 2 澄清与恢复测试'
     assert evaluation.loc['Text-to-SQL 与纠错', '当前状态'] == '本阶段可检查'
     assert evaluation.loc['Text-to-SQL 与纠错', '依据'] == 'Phase 3 SQL 生成、安全校验、执行与纠错自动化测试'
+    captions = '\n'.join(item.value for item in app.caption)
+    assert 'Phase 3 Text-to-SQL 安全执行与纠错均已有自动化检查' in captions
+    assert '正式准确率与性能 Benchmark 留待 Phase 5' in captions
 
 
 def _widget_by_label(widgets, label):

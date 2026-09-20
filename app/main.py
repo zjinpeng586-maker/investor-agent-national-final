@@ -778,7 +778,7 @@ def render_data_center(companies, name_to_id, data_map):
 
 def render_evaluation_page():
     st.markdown('### 系统评测状态')
-    st.caption('评测中心只展示真实可核验状态；Phase 2 多轮上下文与条件澄清已有自动化检查，尚未建立正式准确率评测，因此不展示百分比。')
+    st.caption('Phase 2 多轮与澄清、Phase 3 Text-to-SQL 安全执行与纠错均已有自动化检查；正式准确率与性能 Benchmark 留待 Phase 5，因此当前不展示百分比。')
     rows = [
         {'评测维度': '五页面信息架构', '当前状态': '本阶段可检查', '依据': '页面导航与启动冒烟测试'},
         {'评测维度': 'V1.0 核心能力回归', '当前状态': '本阶段可检查', '依据': '自动化与人工回归结果'},

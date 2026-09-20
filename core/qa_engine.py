@@ -201,7 +201,9 @@ def answer_question(
     df = _company_data(primary, query_data_map)
     if df.empty and sql_result.get('sql_status') == 'fallback':
         df = _company_data(primary, data_map)
-    alerts = compute_alerts(df)
+    # A successful structured query may deliberately project only one metric.
+    # Do not infer an all-clear risk conclusion from absent (unqueried) fields.
+    alerts = [] if sql_result.get('status') == 'success' else compute_alerts(df)
     draft = ''
     evidence_extra = ''
     chart = None
@@ -218,7 +220,12 @@ def answer_question(
             draft += '\n\n' + metric_query(primary, df, metric, years[0] if years else None)
     elif intent == 'finance_query':
         query_metrics = metrics or ['net_profit']
-        draft = '\n'.join(metric_query(primary, df, metric, years[0] if years else None) for metric in query_metrics)
+        query_years = years or [None]
+        draft = '\n'.join(
+            metric_query(primary, df, metric, year)
+            for year in query_years
+            for metric in query_metrics
+        )
     elif intent == 'trend_analysis':
         metric = metrics[0] if metrics else 'revenue'
         draft = trend_text(primary, df, metric)

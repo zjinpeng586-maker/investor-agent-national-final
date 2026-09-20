@@ -83,6 +83,34 @@ def test_multi_metric_answer_is_grounded_in_sql_rows():
     assert '经营现金流' in result['answer']
 
 
+def test_partial_sql_projection_does_not_claim_risk_safety():
+    company_rows = fetch_companies()
+    data_map = {row['name']: rows_to_df(fetch_company_metrics(row['id'])) for row in company_rows}
+    result = answer_question(
+        '比亚迪2024年营业收入是多少？',
+        BYD, CATL, list(data_map), data_map,
+        resolved_context=_context(years=[2024], metrics=['revenue']),
+    )
+    assert result['sql_status'] == 'success'
+    assert '主要规则未触发' not in result['evidence']
+
+
+def test_multi_year_finance_answer_uses_every_sql_row():
+    company_rows = fetch_companies()
+    data_map = {row['name']: rows_to_df(fetch_company_metrics(row['id'])) for row in company_rows}
+    result = answer_question(
+        '比亚迪2023年和2024年营业收入分别是多少？',
+        BYD, CATL, list(data_map), data_map,
+        resolved_context=_context(years=[2023, 2024], metrics=['revenue']),
+    )
+    assert result['sql_status'] == 'success'
+    sql_rows = result['sql_result']['rows']
+    assert {row['year'] for row in sql_rows} == {2023, 2024}
+    for row in sql_rows:
+        assert f'{row["year"]}年' in result['answer']
+        assert f'{row["revenue"]:.2f}' in result['answer']
+
+
 def test_phase2_resolved_context_drives_sql():
     companies = [BYD, CATL]
     first = resolve_turn(
