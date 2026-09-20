@@ -29,7 +29,11 @@ def test_evaluation_page_does_not_claim_unrun_metrics():
 
     page_text = '\n'.join(item.value for item in [*app.markdown, *app.caption])
     assert '不展示百分比' in page_text
-    assert '待后续接入' in str(app.dataframe[0].value.to_dict())
+    evaluation = app.dataframe[0].value.set_index('评测维度')
+    assert evaluation.loc['多轮上下文', '当前状态'] == '本阶段可检查'
+    assert evaluation.loc['多轮上下文', '依据'] == 'Phase 2 自动化多轮测试'
+    assert evaluation.loc['条件澄清', '当前状态'] == '本阶段可检查'
+    assert evaluation.loc['条件澄清', '依据'] == 'Phase 2 澄清与恢复测试'
 
 
 def _widget_by_label(widgets, label):
@@ -108,3 +112,37 @@ def test_qa_period_answer_data_compare_and_header_stay_in_sync():
     _widget_by_label(app.selectbox, '分析企业').set_value('比亚迪股份有限公司').run()
     header_html = '\n'.join(item.value for item in app.markdown if 'context-bar' in item.value)
     assert '当前企业：比亚迪股份有限公司' in header_html
+
+
+def test_new_session_clears_phase2_conversation_context():
+    app = AppTest.from_file(APP_PATH, default_timeout=20).run()
+    _submit_question(app, '比亚迪2024年营业收入是多少？')
+    assert app.session_state.conversation_context['metrics'] == ['revenue']
+
+    _widget_by_label(app.button, '＋ 新建会话').click().run()
+    context = app.session_state.conversation_context
+    assert context['primary_company'] is None
+    assert context['years'] == []
+    assert context['metrics'] == []
+    assert context['intent'] is None
+    assert context['awaiting_clarification'] is False
+
+
+def test_multiturn_ui_updates_context_and_clarification_resumes_answer():
+    app = AppTest.from_file(APP_PATH, default_timeout=20).run()
+    _submit_question(app, '比亚迪2024年营收多少？')
+    _submit_question(app, '那2023年呢？')
+    _submit_question(app, '宁德时代呢？')
+    item = _submit_question(app, '净利润呢？')
+    assert item['result']['parsed']['companies'] == ['宁德时代新能源科技股份有限公司']
+    assert item['result']['parsed']['years'] == [2023]
+    assert item['result']['parsed']['metrics'] == ['net_profit']
+
+    app = AppTest.from_file(APP_PATH, default_timeout=20).run()
+    app.text_area[0].set_value('比亚迪财务数据是多少？')
+    _widget_by_label(app.button, '开始分析').click().run()
+    assert app.session_state.conversation_context['awaiting_clarification'] is True
+    _widget_by_label(app.selectbox, '请选择').set_value('归母净利润')
+    _widget_by_label(app.button, '确认并继续').click().run()
+    assert app.session_state.conversation_context['awaiting_clarification'] is False
+    assert app.session_state.chat_messages[-1]['result']['parsed']['metrics'] == ['net_profit']

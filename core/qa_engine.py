@@ -154,8 +154,15 @@ def answer_question(
     data_map: dict[str, pd.DataFrame],
     profile: str = '平衡型',
     llm_config: dict | str | None = None,
+    resolved_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     parsed = parse_question(question, all_company_names, selected_company, profile, llm_config if llm_config else None)
+    if resolved_context:
+        parsed.update({
+            key: resolved_context[key]
+            for key in ['intent', 'companies', 'years', 'metrics', 'investor_profile', 'reason']
+            if key in resolved_context
+        })
     intent = parsed.get('intent') or 'unknown'
     agent_trace = build_agent_trace(intent, parsed)
     companies = parsed.get('companies') or [selected_company]
