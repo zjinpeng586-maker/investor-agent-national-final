@@ -29,7 +29,11 @@ def test_evaluation_page_does_not_claim_unrun_metrics():
 
     page_text = '\n'.join(item.value for item in [*app.markdown, *app.caption])
     assert '不展示百分比' in page_text
-    assert '待后续接入' in str(app.dataframe[0].value.to_dict())
+    evaluation = app.dataframe[0].value.set_index('评测维度')
+    assert evaluation.loc['多轮上下文', '当前状态'] == '本阶段可检查'
+    assert evaluation.loc['多轮上下文', '依据'] == 'Phase 2 自动化多轮测试'
+    assert evaluation.loc['条件澄清', '当前状态'] == '本阶段可检查'
+    assert evaluation.loc['条件澄清', '依据'] == 'Phase 2 澄清与恢复测试'
 
 
 def _widget_by_label(widgets, label):

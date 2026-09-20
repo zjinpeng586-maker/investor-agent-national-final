@@ -119,11 +119,18 @@ def resolve_turn(
     intent = parsed.get('intent') or 'unknown'
     explicit = {'companies': explicit_companies, 'years': explicit_years, 'metrics': explicit_metrics}
     follow_up = _is_follow_up(question, explicit)
+    history_years = list(context.get('years') or [])
+    history_metrics = list(context.get('metrics') or [])
+    inherited_years = explicit_years or (history_years if follow_up else []) or ([page_year] if page_year else [])
+    inherited_metrics = explicit_metrics or (history_metrics if follow_up else [])
+    inherited_intent = intent
+    if inherited_intent == 'unknown' and follow_up and context.get('intent'):
+        inherited_intent = context['intent']
 
     if not explicit_companies and len(candidate_companies) > 1:
         pending = {
-            'question': question, 'intent': intent, 'companies': [], 'years': explicit_years,
-            'metrics': explicit_metrics, 'page_company': page_company, 'page_compare': page_compare,
+            'question': question, 'intent': inherited_intent, 'companies': [], 'years': inherited_years,
+            'metrics': inherited_metrics, 'page_company': page_company, 'page_compare': page_compare,
             'page_year': page_year, 'follow_up': follow_up,
         }
         return _clarification(
@@ -142,16 +149,16 @@ def resolve_turn(
                 break
         if other_company is None:
             pending = {
-                'question': question, 'intent': intent, 'companies': [], 'years': explicit_years,
-                'metrics': explicit_metrics, 'page_company': page_company, 'page_compare': page_compare,
+                'question': question, 'intent': inherited_intent, 'companies': [], 'years': inherited_years,
+                'metrics': inherited_metrics, 'page_company': page_company, 'page_compare': page_compare,
                 'page_year': page_year, 'follow_up': True,
             }
             options = [{'label': name, 'value': name} for name in companies if name != history_company]
             return _clarification(context, 'company', '你说的“另一家”是指哪家公司？', options, pending)
     if uses_pronoun and not explicit_companies and not page_company and not history_company:
         pending = {
-            'question': question, 'intent': intent, 'companies': [], 'years': explicit_years,
-            'metrics': explicit_metrics, 'page_company': None, 'page_compare': page_compare,
+            'question': question, 'intent': inherited_intent, 'companies': [], 'years': inherited_years,
+            'metrics': inherited_metrics, 'page_company': None, 'page_compare': page_compare,
             'page_year': page_year, 'follow_up': True,
         }
         return _clarification(
@@ -173,8 +180,8 @@ def resolve_turn(
         primary = None
     if primary is None:
         pending = {
-            'question': question, 'intent': intent, 'companies': [], 'years': explicit_years,
-            'metrics': explicit_metrics, 'page_company': page_company, 'page_compare': page_compare,
+            'question': question, 'intent': inherited_intent, 'companies': [], 'years': inherited_years,
+            'metrics': inherited_metrics, 'page_company': page_company, 'page_compare': page_compare,
             'page_year': page_year, 'follow_up': follow_up,
         }
         return _clarification(
@@ -182,7 +189,7 @@ def resolve_turn(
             [{'label': name, 'value': name} for name in companies], pending,
         )
 
-    years = explicit_years or ([page_year] if page_year else []) or list(context.get('years') or [])
+    years = explicit_years or (history_years if follow_up else []) or ([page_year] if page_year else []) or history_years
     metrics = explicit_metrics or list(context.get('metrics') or [])
     if intent == 'unknown' and follow_up and context.get('intent'):
         intent = context['intent']

@@ -93,6 +93,33 @@ def test_clarification_triggers_and_confirmation_resumes_task():
     assert other['field'] == 'company'
 
 
+def test_other_company_clarification_keeps_history_conditions():
+    first = _turn(new_conversation_context(), '比亚迪2024年营业收入是多少？')
+    clarification = resolve_turn(
+        first['context'], '另一家呢？', COMPANIES, page_company=BYD, page_compare=None
+    )
+    assert clarification['status'] == 'needs_clarification'
+    confirmed = confirm_clarification(clarification['context'], CATL, COMPANIES)
+    assert confirmed['resolved']['companies'] == [CATL]
+    assert confirmed['resolved']['years'] == [2024]
+    assert confirmed['resolved']['metrics'] == ['revenue']
+    assert confirmed['resolved']['intent'] == 'finance_query'
+
+
+def test_real_follow_up_inherits_history_year_before_page_year():
+    first = resolve_turn(
+        new_conversation_context(), '比亚迪2024年营业收入是多少？', COMPANIES,
+        page_company=BYD, page_compare=CATL, page_year=2025,
+    )
+    second = resolve_turn(
+        first['context'], '宁德时代呢？', COMPANIES,
+        page_company=BYD, page_compare=CATL, page_year=2025,
+    )
+    assert second['resolved']['companies'] == [CATL]
+    assert second['resolved']['years'] == [2024]
+    assert second['resolved']['metrics'] == ['revenue']
+
+
 def test_new_context_clears_all_inherited_and_clarification_state():
     context = new_conversation_context()
     assert context == {
