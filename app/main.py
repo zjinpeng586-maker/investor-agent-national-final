@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +42,7 @@ from core.service import ingest_online_pdf_bytes, ingest_online_pdf_url, ingest_
 PAGES = ['财报问数', '企业分析', '研究资料库', '数据中心', '评测中心']
 DEFAULT_COMPANY = '比亚迪股份有限公司'
 DEFAULT_COMPARE = '宁德时代新能源科技股份有限公司'
+YEAR_PATTERN = re.compile(r'20\d{2}')
 
 
 def display_value(value, digits: int = 2) -> str:
@@ -84,6 +86,52 @@ def make_radar_chart(score_a: dict, name_a: str, score_b: dict | None = None, na
 
 def make_line_chart(df: pd.DataFrame, metrics: list[str], title: str):
     return make_metric_chart(df, '折线图', metrics, title)
+
+
+def apply_selected_period(question: str, selected_period: str) -> tuple[str, int | None]:
+    """Apply the UI period only when the user did not state a year explicitly."""
+    explicit_years = YEAR_PATTERN.findall(question)
+    if explicit_years:
+        return question, int(explicit_years[0])
+    if selected_period != '自动识别':
+        year = int(selected_period)
+        return f'{question.rstrip("？?。 ")}（{year}年）', year
+    return question, None
+
+
+def filter_result_data(df: pd.DataFrame, parsed: dict) -> pd.DataFrame:
+    """Limit result data to the years actually understood by the QA engine."""
+    if df.empty or 'year' not in df.columns:
+        return pd.DataFrame()
+    years = [int(year) for year in parsed.get('years') or []]
+    if years:
+        return df[df['year'].astype(int).isin(years)].copy()
+    if parsed.get('intent') == 'trend_analysis':
+        return df.sort_values('year').tail(3).copy()
+    return df.copy()
+
+
+def comparison_result_data(
+    primary: str,
+    secondary: str,
+    data_map: dict[str, pd.DataFrame],
+    parsed: dict,
+) -> pd.DataFrame:
+    """Build a factual two-company table using only data already in data_map."""
+    rows = []
+    metrics = parsed.get('metrics') or ['revenue', 'net_profit', 'operating_cashflow', 'roe', 'debt_ratio']
+    for company in [primary, secondary]:
+        company_df = filter_result_data(data_map.get(company, pd.DataFrame()), parsed)
+        if company_df.empty:
+            continue
+        selected_rows = company_df if parsed.get('years') else company_df.sort_values('year').tail(1)
+        for _, row in selected_rows.iterrows():
+            item = {'企业': company, '年度': int(row['year'])}
+            for metric in metrics:
+                if metric in row and pd.notna(row.get(metric)):
+                    item[METRIC_LABELS.get(metric, metric)] = row.get(metric)
+            rows.append(item)
+    return pd.DataFrame(rows)
 
 
 def init_state() -> None:
@@ -204,9 +252,18 @@ def render_header(page: str, selected_main: str, main_df: pd.DataFrame) -> None:
     )
 
 
-def run_question(question: str, selected_main: str, selected_cmp: str, all_names: list[str], data_map, llm_config):
+def run_question(
+    question: str,
+    selected_main: str,
+    selected_cmp: str,
+    selected_period: str,
+    all_names: list[str],
+    data_map,
+    llm_config,
+):
+    effective_question, applied_year = apply_selected_period(question, selected_period)
     result = answer_question(
-        question,
+        effective_question,
         selected_main,
         selected_cmp,
         all_names,
@@ -214,7 +271,13 @@ def run_question(question: str, selected_main: str, selected_cmp: str, all_names
         st.session_state.investor_profile,
         llm_config if llm_enabled(llm_config) else None,
     )
-    st.session_state.chat_messages.append({'question': question, 'result': result})
+    st.session_state.chat_messages.append({
+        'question': question,
+        'effective_question': effective_question,
+        'applied_year': applied_year,
+        'selected_compare': selected_cmp,
+        'result': result,
+    })
     if st.session_state.session_title == '新会话':
         st.session_state.session_title = question[:22]
 
@@ -222,7 +285,17 @@ def run_question(question: str, selected_main: str, selected_cmp: str, all_names
 def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id: dict[str, int], index: int) -> None:
     question, result = item['question'], item['result']
     company = result.get('company')
-    df = data_map.get(company, pd.DataFrame())
+    parsed = result.get('parsed') or {}
+    df = filter_result_data(data_map.get(company, pd.DataFrame()), parsed)
+    metrics = parsed.get('metrics') or ['revenue', 'net_profit', 'operating_cashflow']
+    compare_company = None
+    if parsed.get('intent') == 'company_compare':
+        compare_company = next(
+            (name for name in parsed.get('companies') or [] if name != company and name in data_map),
+            item.get('selected_compare'),
+        )
+        if compare_company == company or compare_company not in data_map:
+            compare_company = None
     with st.chat_message('user'):
         st.write(question)
     with st.chat_message('assistant'):
@@ -230,27 +303,45 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
         st.write(result['answer'])
         tab_chart, tab_data, tab_evidence = st.tabs(['图表', '数据', '依据'])
         with tab_chart:
-            metrics = result.get('parsed', {}).get('metrics') or ['revenue', 'net_profit', 'operating_cashflow']
-            fig = make_line_chart(df, metrics, f'{company} 财务指标趋势')
-            if fig is not None:
-                st.plotly_chart(fig, width='stretch', key=f'qa_chart_{index}')
+            if compare_company:
+                compare_df = comparison_result_data(company, compare_company, data_map, parsed)
+                value_columns = [column for column in compare_df.columns if column not in ['企业', '年度']]
+                long_df = compare_df.melt(
+                    id_vars=['企业', '年度'], value_vars=value_columns, var_name='指标', value_name='数值'
+                ).dropna(subset=['数值'])
+                if not long_df.empty:
+                    fig = px.bar(long_df, x='指标', y='数值', color='企业', barmode='group',
+                                 title=f'{company} vs {compare_company} 核心指标对比')
+                    st.plotly_chart(fig, width='stretch', key=f'qa_compare_chart_{index}')
+                else:
+                    st.info('两家企业当前没有可用于绘图的共同指标。')
             else:
-                st.info('当前问题对应的数据不足以生成趋势图。')
+                fig = make_line_chart(df, metrics, f'{company} 财务指标趋势')
+                if fig is not None:
+                    st.plotly_chart(fig, width='stretch', key=f'qa_chart_{index}')
+                else:
+                    st.info('当前问题对应的数据不足以生成趋势图。')
         with tab_data:
-            if df.empty:
+            if compare_company:
+                compare_df = comparison_result_data(company, compare_company, data_map, parsed)
+                if compare_df.empty:
+                    st.info('两家企业当前没有可展示的结构化指标。')
+                else:
+                    st.dataframe(compare_df, width='stretch', hide_index=True)
+            elif df.empty:
                 st.info('当前企业暂无结构化年度指标。')
             else:
-                cols = [col for col in ['year'] + list(METRIC_LABELS) if col in df.columns]
+                cols = [col for col in ['year'] + metrics if col in df.columns]
                 st.dataframe(df[cols], width='stretch', hide_index=True)
         with tab_evidence:
             st.text(result.get('evidence') or '暂无来源依据。')
             reports = fetch_report_files(name_to_id.get(company)) if company in name_to_id else []
             if reports:
                 st.caption(f'关联来源文件：{reports[0]["file_name"]}')
-        parsed = result.get('parsed') or {}
         years = '、'.join(map(str, parsed.get('years') or [])) or '当前可用期间'
         metrics = '、'.join(METRIC_LABELS.get(x, x) for x in (parsed.get('metrics') or [])) or '综合财务指标'
-        st.caption(f'当前理解：{company}｜{years}｜{metrics}｜{result.get("model_used", "可信数据分析")}')
+        companies = f'{company}、{compare_company}' if compare_company else company
+        st.caption(f'当前理解：{companies}｜{years}｜{metrics}｜{result.get("model_used", "可信数据分析")}')
         with st.expander('查询过程'):
             st.write(f'1. 已识别任务：{parsed.get("intent", "unknown")}')
             st.write(f'2. 已识别企业与期间：{company} / {years}')
@@ -269,11 +360,16 @@ def render_qa_page(selected_main, selected_cmp, all_names, data_map, name_to_id,
     )
     c1, c2 = st.columns(2)
     with c1:
-        selected_main = st.selectbox('当前理解企业', all_names, index=all_names.index(selected_main), key='qa_main')
+        if st.session_state.get('qa_main') not in all_names:
+            st.session_state.qa_main = selected_main
+        selected_main = st.selectbox('当前理解企业', all_names, key='qa_main')
         st.session_state.selected_main = selected_main
     with c2:
         years = data_map[selected_main]['year'].astype(int).tolist()
-        st.selectbox('当前理解期间', ['自动识别'] + [str(y) for y in reversed(years)], key='qa_period')
+        period_options = ['自动识别'] + [str(y) for y in reversed(years)]
+        if st.session_state.get('qa_period') not in period_options:
+            st.session_state.qa_period = '自动识别'
+        selected_period = st.selectbox('当前理解期间', period_options, key='qa_period')
 
     recommended = [
         f'{selected_main}近三年营业收入变化如何？',
@@ -298,7 +394,7 @@ def render_qa_page(selected_main, selected_cmp, all_names, data_map, name_to_id,
     if submitted and question.strip():
         pending = question.strip()
     if pending:
-        run_question(pending, selected_main, selected_cmp, all_names, data_map, llm_config)
+        run_question(pending, selected_main, selected_cmp, selected_period, all_names, data_map, llm_config)
         st.rerun()
 
     if not st.session_state.chat_messages:
@@ -333,10 +429,14 @@ def report_downloads(company: str, df: pd.DataFrame, alerts: list[dict], compare
 
 def render_enterprise_page(analysis_names, data_map, llm_config):
     pick1, pick2 = st.columns(2)
-    selected_main = pick1.selectbox(
-        '分析企业', analysis_names, index=analysis_names.index(st.session_state.selected_main), key='enterprise_main'
-    )
+    if st.session_state.get('enterprise_main') not in analysis_names:
+        st.session_state.enterprise_main = st.session_state.selected_main
+    selected_main = pick1.selectbox('分析企业', analysis_names, key='enterprise_main')
     compare_options = [name for name in analysis_names if name != selected_main]
+    if compare_options and st.session_state.get('enterprise_cmp') not in compare_options:
+        st.session_state.enterprise_cmp = next(
+            (name for name in compare_options if name == st.session_state.selected_cmp), compare_options[0]
+        )
     selected_cmp = pick2.selectbox('对比企业', compare_options, key='enterprise_cmp') if compare_options else selected_main
     st.session_state.selected_main, st.session_state.selected_cmp = selected_main, selected_cmp
     df, cmp_df = data_map[selected_main], data_map[selected_cmp]
@@ -625,6 +725,11 @@ def main() -> None:
         st.error('系统暂无可分析的结构化企业指标，请先导入 CSV 或 Excel。')
         st.stop()
     llm_config = render_sidebar(analysis_names)
+    active_selector = 'qa_main' if st.session_state.page == '财报问数' else (
+        'enterprise_main' if st.session_state.page == '企业分析' else None
+    )
+    if active_selector and st.session_state.get(active_selector) in analysis_names:
+        st.session_state.selected_main = st.session_state[active_selector]
     selected_main = st.session_state.selected_main
     selected_cmp = st.session_state.selected_cmp
     main_df = data_map[selected_main]
