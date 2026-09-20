@@ -24,6 +24,7 @@ from core.analysis import (
     score_company,
 )
 from core.charts import make_metric_chart
+from core.conversation import confirm_clarification, new_conversation_context, resolve_turn
 from core.db import (
     delete_uploaded_company,
     fetch_companies,
@@ -145,6 +146,7 @@ def init_state() -> None:
         'investor_profile': '平衡型',
         'online_candidates': [],
         'online_diag': None,
+        'conversation_context': new_conversation_context(),
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -189,6 +191,7 @@ def render_sidebar(analysis_names: list[str]):
                 st.session_state.recent_sessions = st.session_state.recent_sessions[:5]
             st.session_state.chat_messages = []
             st.session_state.session_title = '新会话'
+            st.session_state.conversation_context = new_conversation_context()
             st.session_state.page = '财报问数'
             st.session_state.navigation = '财报问数'
             st.rerun()
@@ -261,20 +264,46 @@ def run_question(
     data_map,
     llm_config,
 ):
-    effective_question, applied_year = apply_selected_period(question, selected_period)
+    page_year = int(selected_period) if selected_period != '自动识别' else None
+    turn = resolve_turn(
+        st.session_state.conversation_context,
+        question,
+        all_names,
+        page_company=selected_main,
+        page_compare=selected_cmp,
+        page_year=page_year,
+        profile=st.session_state.investor_profile,
+    )
+    st.session_state.conversation_context = turn['context']
+    if turn['status'] == 'needs_clarification':
+        return
+    execute_resolved_question(question, turn, selected_main, selected_cmp, all_names, data_map, llm_config)
+
+
+def execute_resolved_question(
+    question: str,
+    turn: dict,
+    selected_main: str,
+    selected_cmp: str,
+    all_names: list[str],
+    data_map,
+    llm_config,
+):
+    resolved = turn['resolved']
     result = answer_question(
-        effective_question,
+        question,
         selected_main,
         selected_cmp,
         all_names,
         data_map,
         st.session_state.investor_profile,
         llm_config if llm_enabled(llm_config) else None,
+        resolved_context=resolved,
     )
     st.session_state.chat_messages.append({
         'question': question,
-        'effective_question': effective_question,
-        'applied_year': applied_year,
+        'effective_question': question,
+        'applied_year': (resolved.get('years') or [None])[0],
         'selected_compare': selected_cmp,
         'result': result,
     })
@@ -370,6 +399,27 @@ def render_qa_page(selected_main, selected_cmp, all_names, data_map, name_to_id,
         if st.session_state.get('qa_period') not in period_options:
             st.session_state.qa_period = '自动识别'
         selected_period = st.selectbox('当前理解期间', period_options, key='qa_period')
+
+    context = st.session_state.conversation_context
+    context_company = context.get('primary_company') or selected_main
+    context_years = '、'.join(map(str, context.get('years') or [])) or '自动识别'
+    context_metrics = '、'.join(METRIC_LABELS.get(key, key) for key in context.get('metrics') or []) or '待问题识别'
+    st.caption(f'当前上下文：{context_company}｜{context_years}｜{context_metrics}')
+
+    if context.get('awaiting_clarification') and context.get('clarification'):
+        clarification = context['clarification']
+        st.info(clarification['question'])
+        option_map = {option['label']: option['value'] for option in clarification['options']}
+        selected_option = st.selectbox('请选择', list(option_map), key='clarification_choice')
+        if st.button('确认并继续', type='primary', key='confirm_clarification'):
+            turn = confirm_clarification(
+                context, option_map[selected_option], all_names, st.session_state.investor_profile
+            )
+            st.session_state.conversation_context = turn['context']
+            execute_resolved_question(
+                turn['question'], turn, selected_main, selected_cmp, all_names, data_map, llm_config
+            )
+            st.rerun()
 
     recommended = [
         f'{selected_main}近三年营业收入变化如何？',
