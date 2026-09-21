@@ -1,1 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+.env.*
+.streamlit/secrets.toml
+data/uploads/
+data/online_cache/
 data/rag_index/

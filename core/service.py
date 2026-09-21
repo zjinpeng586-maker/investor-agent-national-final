@@ -12,7 +12,8 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def save_upload(file_name: str, content: bytes) -> Path:
-    path = UPLOAD_DIR / file_name
+    safe_name = Path(file_name).name
+    path = UPLOAD_DIR / safe_name
     path.write_bytes(content)
     return path
 

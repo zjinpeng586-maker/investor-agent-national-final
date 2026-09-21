@@ -508,7 +508,7 @@ def report_text_to_pdf_bytes(report_text: str, company_name: str = '企业', sub
         for line in conclusion_lines[:4]:
             story.append(_para(line, styles['body_big']))
     story.append(Spacer(1, 0.4*cm))
-    footer = [['合规提示', '本报告由投资者智能分析助手基于已接入数据和规则引擎自动生成，仅供学习研究与辅助分析，不构成任何形式的投资建议或买卖指令。']]
+    footer = [['合规提示', '本报告由财报智问 V2.0 基于已接入数据和规则引擎自动生成，仅供学习研究与辅助分析，不构成任何形式的投资建议或买卖指令。']]
     table = Table(footer, colWidths=[2.2*cm, 13.8*cm])
     table.setStyle(TableStyle([
         ('FONTNAME', (0,0), (-1,-1), _FONT_NAME), ('FONTSIZE', (0,0), (-1,-1), 8.5),
