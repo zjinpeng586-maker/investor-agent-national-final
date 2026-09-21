@@ -19,7 +19,12 @@ def plan_query(question: str, parsed_context: dict[str, Any]) -> dict[str, str]:
     asks_explanation = any(term in question for term in EXPLANATION_TERMS)
 
     if asks_explanation and (has_metric or intent in STRUCTURED_INTENTS or len(parsed_context.get('companies') or []) > 1):
-        return {'route': 'hybrid', 'reason': '问题同时需要结构化财务事实与报告中的原因解释。'}
+        plan = {'route': 'hybrid', 'reason': '问题同时需要结构化财务事实与报告中的原因解释。'}
+        if len(parsed_context.get('companies') or []) > 1:
+            plan['structured_intent'] = 'company_compare'
+        elif intent in STRUCTURED_INTENTS:
+            plan['structured_intent'] = intent
+        return plan
     if asks_document or (intent == 'risk_warning' and ('年报' in question or '报告' in question)):
         return {'route': 'rag', 'reason': '问题要求从已接入报告中查找定性描述或原文依据。'}
     return {'route': 'sql', 'reason': '问题可由结构化财务数据或既有可信分析链路回答。'}

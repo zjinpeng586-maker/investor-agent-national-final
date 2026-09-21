@@ -17,9 +17,11 @@ from core.qa_engine import answer_question
 from core.retrieval import (
     NO_EVIDENCE,
     build_document_index,
+    build_retrieval_query,
     chunk_pages,
     extract_pdf_pages,
     get_index_status,
+    is_rag_eligible_report,
     retrieve_documents,
 )
 from core.seed import seed_sample_data
@@ -42,6 +44,7 @@ def rag_document(tmp_path_factory):
         '公司2024年持续加大新能源汽车研发投入，重点推进电池和智能化技术。',
         '海外市场拓展面临汇率波动及地区政策风险，公司将加强风险管理。',
         '管理层认为毛利率变化主要受到产品结构调整影响。',
+        '公司归母净利润变化主要受到期间费用、产品结构及市场竞争影响。',
     ]
     for text in pages:
         canvas.setFont('STSong-Light', 12)
@@ -71,11 +74,11 @@ def rag_document(tmp_path_factory):
 
 def test_page_extraction_and_chunks_keep_real_page_numbers(rag_document):
     pages = extract_pdf_pages(rag_document['path'])
-    assert [page['page'] for page in pages] == [1, 2, 3]
+    assert [page['page'] for page in pages] == [1, 2, 3, 4]
     assert '研发投入' in pages[0]['text']
     chunks = chunk_pages(pages, rag_document['report'], chunk_size=24, overlap=5)
     assert chunks
-    assert all(chunk['page'] in {1, 2, 3} for chunk in chunks)
+    assert all(chunk['page'] in {1, 2, 3, 4} for chunk in chunks)
     assert all('研发投入' not in chunk['text'] or chunk['page'] == 1 for chunk in chunks)
     assert all('汇率波动' not in chunk['text'] or chunk['page'] == 2 for chunk in chunks)
 
@@ -84,7 +87,7 @@ def test_lazy_sidecar_index_and_page_level_retrieval(rag_document):
     report = rag_document['report']
     assert get_index_status(report, rag_document['index_root']) == '待首次查询建立'
     index = build_document_index(report, rag_document['index_root'])
-    assert index['page_count'] == 3
+    assert index['page_count'] == 4
     assert index['chunks']
     assert get_index_status(report, rag_document['index_root']) == '已建立'
 
@@ -133,11 +136,46 @@ def test_missing_irrelevant_company_and_year_filters_degrade_safely(rag_document
     assert all(hit['report_year'] == 2024 for hit in year_result['hits'])
 
 
+def test_non_pdf_is_not_eligible_and_no_text_cache_stays_no_text(tmp_path, monkeypatch):
+    csv_report = {'id': 41, 'file_name': 'metrics.csv', 'file_path': str(tmp_path / 'metrics.csv'), 'file_type': 'CSV'}
+    Path(csv_report['file_path']).write_text('year,revenue\n2024,1', encoding='utf-8')
+    assert is_rag_eligible_report(csv_report) is False
+    assert get_index_status(csv_report, tmp_path / 'index') == '不适用'
+    assert build_document_index(csv_report, tmp_path / 'index')['status'] == 'not_applicable'
+
+    empty_pdf = tmp_path / 'scan.pdf'
+    empty_pdf.write_bytes(b'%PDF-1.4 synthetic scan placeholder')
+    pdf_report = {'id': 42, 'file_name': 'scan.pdf', 'file_path': str(empty_pdf), 'file_type': 'PDF'}
+    monkeypatch.setattr('core.retrieval.extract_pdf_pages', lambda _path: [])
+    first = build_document_index(pdf_report, tmp_path / 'index')
+    second = build_document_index(pdf_report, tmp_path / 'index')
+    assert first['status'] == 'no_text'
+    assert second['status'] == 'no_text'
+    assert get_index_status(pdf_report, tmp_path / 'index') == '无可检索文本'
+
+
 def test_deterministic_planner_routes():
     base = {'intent': 'finance_query', 'companies': [BYD], 'years': [2024], 'metrics': ['revenue']}
     assert plan_query('比亚迪2024年营业收入是多少？', base)['route'] == 'sql'
     assert plan_query('比亚迪2024年年报如何描述研发投入？', {**base, 'intent': 'unknown', 'metrics': []})['route'] == 'rag'
     assert plan_query('比亚迪2024年净利润为什么变化？', {**base, 'intent': 'trend_analysis', 'metrics': ['net_profit']})['route'] == 'hybrid'
+    comparison = plan_query(
+        '比亚迪和宁德时代财务表现差异可能来自哪些业务因素？',
+        {'intent': 'unknown', 'companies': [BYD, CATL], 'years': [], 'metrics': []},
+    )
+    assert comparison['route'] == 'hybrid'
+    assert comparison['structured_intent'] == 'company_compare'
+
+
+def test_retrieval_query_includes_resolved_metric_aliases():
+    query = build_retrieval_query(
+        '为什么会出现这种变化？',
+        {'companies': [BYD], 'years': [2024], 'metrics': ['net_profit']},
+    )
+    assert BYD in query
+    assert '2024' in query
+    assert '净利润' in query
+    assert '归属于上市公司股东的净利润' in query
 
 
 def test_hybrid_keeps_sql_numbers_and_adds_real_document_citation(rag_document):
@@ -165,8 +203,24 @@ def test_hybrid_keeps_sql_numbers_and_adds_real_document_citation(rag_document):
     sql_value = result['sql_result']['rows'][0]['net_profit']
     assert f'{sql_value:.2f}' in result['answer']
     assert result['retrieval_result']['status'] == 'success'
-    assert any(citation['page'] == 3 for citation in result['retrieval_result']['citations'])
-    assert 'PDF第3页' in result['evidence']
+    pages = [citation['page'] for citation in result['retrieval_result']['citations']]
+    assert pages[0] == 4
+    assert 3 not in pages
+    assert 'PDF第4页' in result['evidence']
+
+
+def test_multi_company_hybrid_runs_company_compare_sql(rag_document):
+    company_rows = fetch_companies()
+    data_map = {row['name']: rows_to_df(fetch_company_metrics(row['id'])) for row in company_rows}
+    result = answer_question(
+        '比亚迪和宁德时代财务表现差异可能来自哪些业务因素？',
+        BYD, CATL, list(data_map), data_map,
+    )
+    assert result['query_plan']['route'] == 'hybrid'
+    assert result['query_plan']['structured_intent'] == 'company_compare'
+    assert result['sql_result']['status'] == 'success'
+    assert {row['company'] for row in result['sql_result']['rows']} == {BYD, CATL}
+    assert result['retrieval_result']['status'] in {'success', 'no_evidence'}
 
 
 def test_phase4_ui_citations_process_library_and_evaluation(rag_document):

@@ -12,6 +12,30 @@ from core.db import ROOT, fetch_report_files
 
 INDEX_ROOT = ROOT / 'data' / 'rag_index'
 NO_EVIDENCE = '当前未检索到足以支持该问题的可核验文档证据。'
+METRIC_ALIASES = {
+    'revenue': ['营业收入', '营收', '收入'],
+    'net_profit': ['净利润', '归母净利润', '归属于上市公司股东的净利润'],
+    'operating_cashflow': ['经营现金流', '经营活动产生的现金流量净额'],
+    'roe': ['ROE', '净资产收益率'],
+    'debt_ratio': ['资产负债率', '负债率'],
+    'gross_margin': ['毛利率', '销售毛利率'],
+    'eps': ['每股收益', 'EPS'],
+}
+
+
+def is_rag_eligible_report(report: dict[str, Any]) -> bool:
+    suffix = Path(str(report.get('file_path') or report.get('file_name') or '')).suffix.lower()
+    file_type = str(report.get('file_type') or '').strip().lower()
+    return suffix == '.pdf' or file_type in {'pdf', 'application/pdf'}
+
+
+def build_retrieval_query(question: str, resolved_context: dict[str, Any]) -> str:
+    parts = [question]
+    parts.extend(resolved_context.get('companies') or [])
+    parts.extend(str(year) for year in resolved_context.get('years') or [])
+    for metric in resolved_context.get('metrics') or []:
+        parts.extend(METRIC_ALIASES.get(metric, [metric]))
+    return ' '.join(part for part in parts if part)
 
 
 def extract_pdf_pages(file_path: str | Path) -> list[dict[str, Any]]:
@@ -78,6 +102,8 @@ def _index_path(report: dict[str, Any], index_root: Path) -> Path:
 
 
 def build_document_index(report: dict[str, Any], index_root: Path = INDEX_ROOT) -> dict[str, Any]:
+    if not is_rag_eligible_report(report):
+        return {'status': 'not_applicable', 'page_count': 0, 'chunks': []}
     path = _local_path(report.get('file_path', ''))
     if not path.is_file():
         return {'status': 'missing', 'page_count': 0, 'chunks': [], 'error': '文件不存在。'}
@@ -87,7 +113,6 @@ def build_document_index(report: dict[str, Any], index_root: Path = INDEX_ROOT) 
         try:
             cached = json.loads(index_path.read_text(encoding='utf-8'))
             if cached.get('file_size') == stat.st_size and cached.get('mtime_ns') == stat.st_mtime_ns:
-                cached['status'] = 'ready'
                 return cached
         except Exception:
             pass
@@ -108,6 +133,8 @@ def build_document_index(report: dict[str, Any], index_root: Path = INDEX_ROOT) 
 
 
 def get_index_status(report: dict[str, Any], index_root: Path = INDEX_ROOT) -> str:
+    if not is_rag_eligible_report(report):
+        return '不适用'
     path = _local_path(report.get('file_path', ''))
     if not path.is_file():
         return '文件缺失'
@@ -117,7 +144,9 @@ def get_index_status(report: dict[str, Any], index_root: Path = INDEX_ROOT) -> s
     try:
         cached = json.loads(index_path.read_text(encoding='utf-8'))
         stat = path.stat()
-        return '已建立' if cached.get('file_size') == stat.st_size and cached.get('mtime_ns') == stat.st_mtime_ns else '待刷新'
+        if cached.get('file_size') != stat.st_size or cached.get('mtime_ns') != stat.st_mtime_ns:
+            return '待刷新'
+        return '无可检索文本' if cached.get('status') == 'no_text' else '已建立'
     except Exception:
         return '待刷新'
 
@@ -181,7 +210,10 @@ def retrieve_documents(
     index_root: Path = INDEX_ROOT,
     top_k: int = 5,
 ) -> dict[str, Any]:
-    report_rows = [dict(row) for row in (reports if reports is not None else fetch_report_files())]
+    report_rows = [
+        dict(row) for row in (reports if reports is not None else fetch_report_files())
+        if is_rag_eligible_report(dict(row))
+    ]
     companies = set(resolved_context.get('companies') or [])
     years = {int(year) for year in resolved_context.get('years') or []}
     company_reports = [row for row in report_rows if row.get('company_name') in companies]
@@ -196,14 +228,29 @@ def retrieve_documents(
                 all_chunks.extend(index['chunks'])
         except Exception:
             continue
-    hits = rank_chunks(question, all_chunks, top_k)
+    retrieval_query = build_retrieval_query(question, resolved_context)
+    metric_aliases = [
+        alias.lower()
+        for metric in resolved_context.get('metrics') or []
+        for alias in METRIC_ALIASES.get(metric, [metric])
+    ]
+    if metric_aliases:
+        all_chunks = [
+            chunk for chunk in all_chunks
+            if any(alias in chunk.get('text', '').lower() for alias in metric_aliases)
+        ]
+    else:
+        raw_matches = rank_chunks(question, all_chunks, top_k=max(1, len(all_chunks)))
+        matched_chunks = {item.get('chunk_id') for item in raw_matches}
+        all_chunks = [chunk for chunk in all_chunks if chunk.get('chunk_id') in matched_chunks]
+    hits = rank_chunks(retrieval_query, all_chunks, top_k)
     citations = []
     for number, hit in enumerate(hits, 1):
         citations.append({
             'number': number, 'document_id': hit.get('document_id'),
             'company': hit.get('company'), 'report_year': hit.get('report_year'),
             'file_name': hit.get('file_name'), 'file_path': hit.get('file_path'),
-            'page': hit.get('page'), 'snippet': _extract_snippet(question, hit.get('text', '')),
+            'page': hit.get('page'), 'snippet': _extract_snippet(retrieval_query, hit.get('text', '')),
             'chunk_id': hit.get('chunk_id'), 'score': hit.get('score'),
         })
     answer = NO_EVIDENCE
@@ -216,4 +263,5 @@ def retrieve_documents(
         'hits': hits, 'citations': citations, 'candidate_documents': len(selected),
         'indexed_documents': indexed_documents, 'chunk_count': len(all_chunks),
         'hit_count': len(hits), 'exact_year_match': bool(exact),
+        'retrieval_query': retrieval_query,
     }
