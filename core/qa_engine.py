@@ -19,6 +19,8 @@ from core.analysis import (
 from core.llm import llm_enabled, parse_question_with_llm, polish_answer_with_llm
 from core.agents import build_agent_trace, agent_trace_text
 from core.text_to_sql import run_text_to_sql
+from core.planner import plan_query
+from core.retrieval import retrieve_documents
 
 KEYWORDS = {
     'revenue': ['营业收入', '营收', '收入', 'revenue'],
@@ -157,19 +159,24 @@ def answer_question(
     llm_config: dict | str | None = None,
     resolved_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    parsed = parse_question(question, all_company_names, selected_company, profile, llm_config if llm_config else None)
+    raw_parsed = parse_question(question, all_company_names, selected_company, profile, llm_config if llm_config else None)
+    parsed = dict(raw_parsed)
     if resolved_context:
         parsed.update({
             key: resolved_context[key]
             for key in ['intent', 'companies', 'years', 'metrics', 'investor_profile', 'reason']
             if key in resolved_context
         })
+        if len(raw_parsed.get('companies') or []) > 1 and len(parsed.get('companies') or []) < 2:
+            parsed['companies'] = raw_parsed['companies']
     intent = parsed.get('intent') or 'unknown'
-    agent_trace = build_agent_trace(intent, parsed)
     companies = parsed.get('companies') or [selected_company]
     years = parsed.get('years') or []
     metrics = parsed.get('metrics') or []
     investor_profile = parsed.get('investor_profile') or profile
+    query_plan = plan_query(question, parsed)
+    analysis_intent = query_plan.get('structured_intent') or intent
+    agent_trace = build_agent_trace(analysis_intent, {**parsed, 'intent': analysis_intent})
 
     # keep at most two companies for comparison
     primary = companies[0] if companies else selected_company
@@ -187,8 +194,9 @@ def answer_question(
     sql_result: dict[str, Any] = {
         'status': 'not_applicable', 'sql_status': 'not_applicable', 'attempts': [], 'rows': [],
     }
-    if intent in {'finance_query', 'trend_analysis', 'company_compare'}:
-        sql_result = run_text_to_sql(parsed)
+    if query_plan['route'] in {'sql', 'hybrid'} and analysis_intent in {'finance_query', 'trend_analysis', 'company_compare'}:
+        sql_context = {**parsed, 'intent': analysis_intent}
+        sql_result = run_text_to_sql(sql_context)
         if sql_result['status'] == 'success':
             sql_df = pd.DataFrame(sql_result['rows'])
             query_data_map = {}
@@ -201,24 +209,31 @@ def answer_question(
     df = _company_data(primary, query_data_map)
     if df.empty and sql_result.get('sql_status') == 'fallback':
         df = _company_data(primary, data_map)
+    retrieval_result: dict[str, Any] = {
+        'status': 'not_applicable', 'answer': '', 'hits': [], 'citations': [],
+        'candidate_documents': 0, 'chunk_count': 0, 'hit_count': 0,
+    }
+    if query_plan['route'] in {'rag', 'hybrid'}:
+        retrieval_result = retrieve_documents(question, parsed)
+
     # A successful structured query may deliberately project only one metric.
     # Do not infer an all-clear risk conclusion from absent (unqueried) fields.
-    alerts = [] if sql_result.get('status') == 'success' else compute_alerts(df)
+    alerts = [] if sql_result.get('status') == 'success' or query_plan['route'] == 'rag' else compute_alerts(df)
     draft = ''
     evidence_extra = ''
     chart = None
     report_text = None
 
-    if intent == 'out_of_scope':
+    if analysis_intent == 'out_of_scope':
         draft = '本系统聚焦上市公司财务分析、风险预警、企业对比和投资者参考结论，暂不提供天气、生活服务或通用闲聊回答。你可以询问企业财务、风险或对比相关问题。'
-    elif intent == 'refusal':
+    elif analysis_intent == 'refusal':
         draft = '本系统不预测短期股价涨跌，也不提供买入、卖出或保证收益类建议。可以基于已接入的财务指标、风险预警和企业对比结果，生成投资者参考结论。'
-    elif intent == 'metric_explain':
+    elif analysis_intent == 'metric_explain':
         metric = metrics[0] if metrics else 'roe'
         draft = explain_metric(metric)
         if df is not None and not df.empty and metrics:
             draft += '\n\n' + metric_query(primary, df, metric, years[0] if years else None)
-    elif intent == 'finance_query':
+    elif analysis_intent == 'finance_query':
         query_metrics = metrics or ['net_profit']
         query_years = years or [None]
         draft = '\n'.join(
@@ -226,15 +241,15 @@ def answer_question(
             for year in query_years
             for metric in query_metrics
         )
-    elif intent == 'trend_analysis':
+    elif analysis_intent == 'trend_analysis':
         metric = metrics[0] if metrics else 'revenue'
         draft = trend_text(primary, df, metric)
         if '为什么' in question or '原因' in question or '增收不增利' in question:
-            draft += '\n原因分析：系统会结合营收、归母净利润、经营现金流、ROE和毛利率变化判断。如果收入增长但利润或现金流下降，通常意味着盈利转化效率、成本压力或现金回款质量需要重点跟踪。'
+            draft += '\n一般分析假设：如果收入增长但利润或现金流下降，通常意味着盈利转化效率、成本压力或现金回款质量需要重点跟踪；这不是企业年报披露的原因。'
         chart = 'trend'
-    elif intent == 'risk_warning':
+    elif analysis_intent == 'risk_warning':
         draft = '；'.join([f'{a["title"]}：{a["message"]}\n规则依据：{a.get("rule", "-")}\n数据依据：{a.get("basis", "-")}\n来源：{a.get("source", "-")}' for a in alerts])
-    elif intent == 'company_compare':
+    elif analysis_intent == 'company_compare':
         if secondary is None or secondary == primary:
             draft = '当前没有可用于对比的第二家企业，请在左侧选择对比企业，或上传新的企业结构化财务数据。'
         else:
@@ -244,20 +259,31 @@ def answer_question(
             cmp = compare_companies(primary, df, secondary, secondary_df, investor_profile)
             draft = cmp['reasoning'] + '\n评分拆解：\n' + cmp['score_table'].to_string(index=False)
             evidence_extra = '企业对比评分依据：\n' + '\n'.join([f'{k}：' + '；'.join(v) for k, v in cmp['basis'].items()])
-    elif intent == 'report_generate':
+    elif analysis_intent == 'report_generate':
         cmp = None
         if secondary and secondary in data_map and secondary != primary:
             cmp = compare_companies(primary, df, secondary, _company_data(secondary, data_map), investor_profile)
         report_text = generate_report(primary, df, alerts, cmp, investor_profile)
         draft = '已生成投资者分析报告，可在“分析报告”页查看并下载。\n\n' + report_text[:800] + ('...' if len(report_text) > 800 else '')
-    elif intent == 'investment_summary' or intent == 'unknown':
-        if intent == 'unknown':
+    elif analysis_intent == 'investment_summary' or analysis_intent == 'unknown':
+        if analysis_intent == 'unknown':
             draft = '我暂时没有识别出非常具体的分析意图。以下先给出企业摘要，你也可以继续询问“净利润是多少”“有哪些风险”“和宁德时代谁更适合稳健型投资者”等问题。\n\n'
         draft += build_summary(primary, df, alerts, investor_profile)
     else:
         draft = build_summary(primary, df, alerts, investor_profile)
 
+    if query_plan['route'] == 'rag':
+        draft = retrieval_result['answer']
+    elif query_plan['route'] == 'hybrid':
+        draft = f'结构化数据：\n{draft}\n\n年报解释：\n{retrieval_result["answer"]}'
+
     evidence = _evidence_from(primary, df, alerts, evidence_extra)
+    if retrieval_result.get('citations'):
+        document_evidence = '\n'.join(
+            f'[{item["number"]}] {item["file_name"]}，PDF第{item["page"]}页：{item["snippet"]}'
+            for item in retrieval_result['citations']
+        )
+        evidence += '\n\n文档证据：\n' + document_evidence
     evidence = evidence + '\n\n智能体协同链路：\n' + agent_trace_text(agent_trace)
     final_answer = draft
     model_used = '可信数据分析'
@@ -280,4 +306,7 @@ def answer_question(
         'agent_trace': agent_trace,
         'sql_result': sql_result,
         'sql_status': sql_result.get('sql_status', 'not_applicable'),
+        'query_plan': query_plan,
+        'retrieval_result': retrieval_result,
+        'analysis_intent': analysis_intent,
     }
