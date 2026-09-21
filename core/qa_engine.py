@@ -19,6 +19,8 @@ from core.analysis import (
 from core.llm import llm_enabled, parse_question_with_llm, polish_answer_with_llm
 from core.agents import build_agent_trace, agent_trace_text
 from core.text_to_sql import run_text_to_sql
+from core.planner import plan_query
+from core.retrieval import retrieve_documents
 
 KEYWORDS = {
     'revenue': ['营业收入', '营收', '收入', 'revenue'],
@@ -170,6 +172,7 @@ def answer_question(
     years = parsed.get('years') or []
     metrics = parsed.get('metrics') or []
     investor_profile = parsed.get('investor_profile') or profile
+    query_plan = plan_query(question, parsed)
 
     # keep at most two companies for comparison
     primary = companies[0] if companies else selected_company
@@ -187,7 +190,7 @@ def answer_question(
     sql_result: dict[str, Any] = {
         'status': 'not_applicable', 'sql_status': 'not_applicable', 'attempts': [], 'rows': [],
     }
-    if intent in {'finance_query', 'trend_analysis', 'company_compare'}:
+    if query_plan['route'] in {'sql', 'hybrid'} and intent in {'finance_query', 'trend_analysis', 'company_compare'}:
         sql_result = run_text_to_sql(parsed)
         if sql_result['status'] == 'success':
             sql_df = pd.DataFrame(sql_result['rows'])
@@ -201,9 +204,16 @@ def answer_question(
     df = _company_data(primary, query_data_map)
     if df.empty and sql_result.get('sql_status') == 'fallback':
         df = _company_data(primary, data_map)
+    retrieval_result: dict[str, Any] = {
+        'status': 'not_applicable', 'answer': '', 'hits': [], 'citations': [],
+        'candidate_documents': 0, 'chunk_count': 0, 'hit_count': 0,
+    }
+    if query_plan['route'] in {'rag', 'hybrid'}:
+        retrieval_result = retrieve_documents(question, parsed)
+
     # A successful structured query may deliberately project only one metric.
     # Do not infer an all-clear risk conclusion from absent (unqueried) fields.
-    alerts = [] if sql_result.get('status') == 'success' else compute_alerts(df)
+    alerts = [] if sql_result.get('status') == 'success' or query_plan['route'] == 'rag' else compute_alerts(df)
     draft = ''
     evidence_extra = ''
     chart = None
@@ -230,7 +240,7 @@ def answer_question(
         metric = metrics[0] if metrics else 'revenue'
         draft = trend_text(primary, df, metric)
         if '为什么' in question or '原因' in question or '增收不增利' in question:
-            draft += '\n原因分析：系统会结合营收、归母净利润、经营现金流、ROE和毛利率变化判断。如果收入增长但利润或现金流下降，通常意味着盈利转化效率、成本压力或现金回款质量需要重点跟踪。'
+            draft += '\n一般分析假设：如果收入增长但利润或现金流下降，通常意味着盈利转化效率、成本压力或现金回款质量需要重点跟踪；这不是企业年报披露的原因。'
         chart = 'trend'
     elif intent == 'risk_warning':
         draft = '；'.join([f'{a["title"]}：{a["message"]}\n规则依据：{a.get("rule", "-")}\n数据依据：{a.get("basis", "-")}\n来源：{a.get("source", "-")}' for a in alerts])
@@ -257,7 +267,18 @@ def answer_question(
     else:
         draft = build_summary(primary, df, alerts, investor_profile)
 
+    if query_plan['route'] == 'rag':
+        draft = retrieval_result['answer']
+    elif query_plan['route'] == 'hybrid':
+        draft = f'结构化数据：\n{draft}\n\n年报解释：\n{retrieval_result["answer"]}'
+
     evidence = _evidence_from(primary, df, alerts, evidence_extra)
+    if retrieval_result.get('citations'):
+        document_evidence = '\n'.join(
+            f'[{item["number"]}] {item["file_name"]}，PDF第{item["page"]}页：{item["snippet"]}'
+            for item in retrieval_result['citations']
+        )
+        evidence += '\n\n文档证据：\n' + document_evidence
     evidence = evidence + '\n\n智能体协同链路：\n' + agent_trace_text(agent_trace)
     final_answer = draft
     model_used = '可信数据分析'
@@ -280,4 +301,6 @@ def answer_question(
         'agent_trace': agent_trace,
         'sql_result': sql_result,
         'sql_status': sql_result.get('sql_status', 'not_applicable'),
+        'query_plan': query_plan,
+        'retrieval_result': retrieval_result,
     }

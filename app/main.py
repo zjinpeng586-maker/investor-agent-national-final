@@ -35,6 +35,7 @@ from core.db import (
 from core.llm import PROVIDER_PRESETS, build_llm_config, enhance_report_with_llm, llm_enabled
 from core.online_disclosure import guess_exchange, resolve_stock_code, search_disclosures_with_details
 from core.qa_engine import answer_question
+from core.retrieval import get_index_status
 from core.report_pdf import report_text_to_pdf_bytes
 from core.seed import seed_sample_data
 from core.service import ingest_online_pdf_bytes, ingest_online_pdf_url, ingest_pdf_file, ingest_tabular_file
@@ -377,6 +378,12 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
                 st.dataframe(df[cols], width='stretch', hide_index=True)
         with tab_evidence:
             st.text(result.get('evidence') or '暂无来源依据。')
+            retrieval = result.get('retrieval_result') or {}
+            for citation in retrieval.get('citations') or []:
+                st.markdown(f'**来源 {citation["number"]}**')
+                st.write(citation.get('file_name') or '未命名文档')
+                st.caption(f'报告年份：{citation.get("report_year") or "未标注"}｜PDF第{citation["page"]}页')
+                st.write(f'“{citation.get("snippet", "")}”')
             reports = fetch_report_files(name_to_id.get(company)) if company in name_to_id else []
             if reports:
                 st.caption(f'关联来源文件：{reports[0]["file_name"]}')
@@ -385,6 +392,10 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
         companies = f'{company}、{compare_company}' if compare_company else company
         st.caption(f'当前理解：{companies}｜{years}｜{metrics}｜{result.get("model_used", "可信数据分析")}')
         with st.expander('查询过程'):
+            query_plan = result.get('query_plan') or {'route': 'sql', 'reason': '既有可信查询链路'}
+            retrieval = result.get('retrieval_result') or {}
+            st.write(f'查询规划：{query_plan.get("route", "sql").upper()}')
+            st.caption(query_plan.get('reason', ''))
             st.write(f'1. 已识别任务：{parsed.get("intent", "unknown")}')
             st.write(f'2. 已识别企业与期间：{company} / {years}')
             if sql_result.get('sql_status') in {'success', 'fallback'}:
@@ -405,6 +416,12 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
             st.write('4. 已核对查询结果、规则依据与来源记录')
             if result.get('agent_trace'):
                 st.dataframe(pd.DataFrame(result['agent_trace']), width='stretch', hide_index=True)
+            if query_plan.get('route') in {'rag', 'hybrid'}:
+                st.write(f'RAG 候选文档数：{retrieval.get("candidate_documents", 0)}')
+                st.write(f'索引 chunk 数：{retrieval.get("chunk_count", 0)}')
+                st.write(f'检索命中数：{retrieval.get("hit_count", 0)}')
+                pages = sorted({item['page'] for item in retrieval.get('citations', [])})
+                st.write('实际引用页码：' + ('、'.join(f'PDF第{page}页' for page in pages) if pages else '无'))
             if sql_result.get('sql_status') == 'fallback':
                 st.warning('Text-to-SQL 未完成有效查询，本次已明确回退到 V1.0 可信数据路径。')
 
@@ -591,7 +608,7 @@ def render_enterprise_page(analysis_names, data_map, llm_config):
 def render_library_page(companies, name_to_id):
     reports = fetch_report_files()
     st.markdown('### 已接入研究资料')
-    st.caption('当前展示数据库中真实存在的年报、公开披露 PDF 与结构化数据来源；研报 RAG、页码级引用及回答引用关系将在后续阶段接入。')
+    st.caption('当前展示真实接入文档及页码级 RAG 索引状态；索引可在首次问答检索时自动建立，并按文件变化自动刷新。')
     if not reports:
         st.info('当前资料库暂无文件，可前往“数据中心”接入资料。')
         return
@@ -603,6 +620,7 @@ def render_library_page(companies, name_to_id):
             '企业': report['company_name'] or '未关联',
             '报告年份': report['report_year'] or '-',
             '解析状态': report['parse_status'] or '未知',
+            'RAG索引状态': get_index_status(dict(report)),
             '接入时间': report['uploaded_at'],
         })
     library_df = pd.DataFrame(rows)
@@ -624,7 +642,7 @@ def render_library_page(companies, name_to_id):
         st.write(f'文件路径 / 来源：{report["file_path"]}')
         st.write(f'解析状态：{report["parse_status"]}')
         st.write(f'来源说明：{report["note"] or "暂无补充说明"}')
-        st.info('当前版本尚未建立页码级索引和回答引用关系，此处不展示推测或虚构信息。')
+        st.info(f'RAG 索引状态：{get_index_status(dict(report))}。引用仅在真实页级文本检索命中后展示。')
 
 
 def show_import_messages(title: str, warnings: list[str] | None = None):
@@ -786,7 +804,7 @@ def render_evaluation_page():
         {'评测维度': '多轮上下文', '当前状态': '本阶段可检查', '依据': 'Phase 2 自动化多轮测试'},
         {'评测维度': '条件澄清', '当前状态': '本阶段可检查', '依据': 'Phase 2 澄清与恢复测试'},
         {'评测维度': 'Text-to-SQL 与纠错', '当前状态': '本阶段可检查', '依据': 'Phase 3 SQL 生成、安全校验、执行与纠错自动化测试'},
-        {'评测维度': '研报 RAG', '当前状态': '待后续接入', '依据': 'Phase 4'},
+        {'评测维度': '研报 RAG', '当前状态': '本阶段可检查', '依据': 'Phase 4 页级索引、检索、引用与 SQL/RAG 融合自动化测试'},
     ]
     st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
     st.markdown('<div class="status-note">未运行的能力不会显示为通过，也不会生成虚构准确率或响应时间。</div>', unsafe_allow_html=True)
