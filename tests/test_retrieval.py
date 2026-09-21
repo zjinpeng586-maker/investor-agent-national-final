@@ -160,6 +160,12 @@ def test_deterministic_planner_routes():
     base = {'intent': 'finance_query', 'companies': [BYD], 'years': [2024], 'metrics': ['revenue']}
     assert plan_query('比亚迪2024年营业收入是多少？', base)['route'] == 'sql'
     assert plan_query('比亚迪2024年年报如何描述研发投入？', {**base, 'intent': 'unknown', 'metrics': []})['route'] == 'rag'
+    numeric_report = plan_query(
+        '比亚迪2024年年报中的净利润是多少？',
+        {**base, 'metrics': ['net_profit']},
+    )
+    assert numeric_report['route'] == 'hybrid'
+    assert numeric_report['structured_intent'] == 'finance_query'
     assert plan_query('比亚迪2024年净利润为什么变化？', {**base, 'intent': 'trend_analysis', 'metrics': ['net_profit']})['route'] == 'hybrid'
     comparison = plan_query(
         '比亚迪和宁德时代财务表现差异可能来自哪些业务因素？',
@@ -179,6 +185,22 @@ def test_retrieval_query_includes_resolved_metric_aliases():
     assert '净利润' in query
     assert '归属于上市公司股东的净利润' in query
     assert is_explanation_query('为什么会出现这种变化？') is True
+
+
+def test_report_numeric_question_keeps_sql_authoritative(rag_document):
+    company_rows = fetch_companies()
+    data_map = {row['name']: rows_to_df(fetch_company_metrics(row['id'])) for row in company_rows}
+    resolved = {'intent': 'finance_query', 'companies': [BYD], 'years': [2024], 'metrics': ['net_profit']}
+    result = answer_question(
+        '比亚迪2024年年报中的净利润是多少？',
+        BYD, CATL, list(data_map), data_map, resolved_context=resolved,
+    )
+    assert result['query_plan']['route'] == 'hybrid'
+    assert result['query_plan']['structured_intent'] == 'finance_query'
+    assert result['sql_result']['status'] == 'success'
+    sql_value = result['sql_result']['rows'][0]['net_profit']
+    assert f'{sql_value:.2f}' in result['answer']
+    assert result['retrieval_result']['status'] in {'success', 'no_evidence'}
 
 
 def test_hybrid_keeps_sql_numbers_and_adds_real_document_citation(rag_document):
@@ -256,6 +278,14 @@ def test_multi_company_hybrid_ui_shows_effective_and_original_intents(rag_docume
     visible = '\n'.join(str(item.value) for item in [*app.markdown, *app.text, *app.caption])
     assert '已识别任务：company_compare' in visible
     assert '原始解析：unknown｜结构化子任务：company_compare' in visible
+    result = app.session_state.chat_messages[-1]['result']
+    assert result['sql_result']['status'] == 'success'
+    comparison_tables = [
+        frame.value for frame in app.dataframe
+        if '企业' in frame.value.columns
+    ]
+    assert comparison_tables
+    assert any(set(table['企业']) == {BYD, CATL} for table in comparison_tables)
 
 
 def test_phase4_ui_citations_process_library_and_evaluation(rag_document):

@@ -316,6 +316,7 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
     question, result = item['question'], item['result']
     company = result.get('company')
     parsed = result.get('parsed') or {}
+    analysis_intent = result.get('analysis_intent') or parsed.get('intent')
     sql_result = result.get('sql_result') or {}
     sql_rows = pd.DataFrame(sql_result.get('rows') or [])
     if sql_result.get('status') == 'success' and not sql_rows.empty:
@@ -324,7 +325,7 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
         df = filter_result_data(data_map.get(company, pd.DataFrame()), parsed)
     metrics = parsed.get('metrics') or ['revenue', 'net_profit', 'operating_cashflow']
     compare_company = None
-    if parsed.get('intent') == 'company_compare':
+    if analysis_intent == 'company_compare':
         compare_company = next(
             (name for name in parsed.get('companies') or [] if name != company and name in data_map),
             item.get('selected_compare'),
@@ -396,7 +397,6 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
             retrieval = result.get('retrieval_result') or {}
             st.write(f'查询规划：{query_plan.get("route", "sql").upper()}')
             st.caption(query_plan.get('reason', ''))
-            analysis_intent = result.get('analysis_intent') or parsed.get('intent', 'unknown')
             st.write(f'1. 已识别任务：{analysis_intent}')
             if analysis_intent != parsed.get('intent'):
                 st.caption(f'原始解析：{parsed.get("intent", "unknown")}｜结构化子任务：{analysis_intent}')
