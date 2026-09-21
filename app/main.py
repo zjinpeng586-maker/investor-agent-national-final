@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import re
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,7 @@ from core.db import (
     fetch_report_files,
     init_db,
 )
+from core.evaluation import CATEGORY_LABELS, run_benchmark
 from core.llm import PROVIDER_PRESETS, build_llm_config, enhance_report_with_llm, llm_enabled
 from core.online_disclosure import guess_exchange, resolve_stock_code, search_disclosures_with_details
 from core.qa_engine import answer_question
@@ -798,19 +800,51 @@ def render_data_center(companies, name_to_id, data_map):
 
 
 def render_evaluation_page():
-    st.markdown('### 系统评测状态')
-    st.caption('Phase 2 多轮与澄清、Phase 3 Text-to-SQL、Phase 4 页级 RAG 与 SQL/RAG 融合均已有自动化检查；正式准确率与性能 Benchmark 留待 Phase 5，因此当前不展示百分比。')
-    rows = [
-        {'评测维度': '五页面信息架构', '当前状态': '本阶段可检查', '依据': '页面导航与启动冒烟测试'},
-        {'评测维度': 'V1.0 核心能力回归', '当前状态': '本阶段可检查', '依据': '自动化与人工回归结果'},
-        {'评测维度': '查询准确性', '当前状态': '待建立标准测试集', '依据': 'Phase 5'},
-        {'评测维度': '多轮上下文', '当前状态': '本阶段可检查', '依据': 'Phase 2 自动化多轮测试'},
-        {'评测维度': '条件澄清', '当前状态': '本阶段可检查', '依据': 'Phase 2 澄清与恢复测试'},
-        {'评测维度': 'Text-to-SQL 与纠错', '当前状态': '本阶段可检查', '依据': 'Phase 3 SQL 生成、安全校验、执行与纠错自动化测试'},
-        {'评测维度': '研报 RAG', '当前状态': '本阶段可检查', '依据': 'Phase 4 页级索引、检索、引用与 SQL/RAG 融合自动化测试'},
-    ]
-    st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
-    st.markdown('<div class="status-note">未运行的能力不会显示为通过，也不会生成虚构准确率或响应时间。</div>', unsafe_allow_html=True)
+    st.markdown('### 本地确定性回归 Benchmark')
+    st.caption('结果只在点击后于当前环境真实执行并计算；未运行时不展示准确率。')
+    st.info(
+        '本评测覆盖多轮上下文、Planner 路由、Text-to-SQL 结果、SQL 安全和页级 RAG。'
+        'RAG 使用运行时生成的多页测试 PDF 验证 page → chunk → retrieval → citation。\n\n'
+        '不代表真实市场全部公司、所有 PDF 排版、OCR 扫描件、公网稳定性、大模型能力或生产级并发性能。'
+    )
+    if st.button('运行本地 Benchmark', type='primary'):
+        with st.spinner('正在执行本地 Benchmark…'):
+            st.session_state.benchmark_result = run_benchmark()
+    result = st.session_state.get('benchmark_result')
+    if not result:
+        st.warning('尚未运行当前环境 Benchmark。')
+        st.dataframe(pd.DataFrame([{
+            '评测维度': label, '当前状态': '尚未运行', '依据': '点击“运行本地 Benchmark”'
+        } for label in CATEGORY_LABELS.values()]), width='stretch', hide_index=True)
+        return
+
+    st.caption(result['disclaimer'])
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric('Benchmark 版本', result['suite_version'])
+    c2.metric('总样本数', result['total'])
+    c3.metric('通过 / 失败', f'{result["passed"]} / {result["failed"]}')
+    c4.metric('总体通过率', f'{result["pass_rate"] * 100:.2f}%')
+    st.write(f'运行时间：{result["started_at"]}')
+    st.write(f'总耗时：{result["duration_ms"]:.3f} ms')
+    st.caption('这是当前环境下本地 Benchmark 的运行耗时，不代表生产服务 SLA。')
+    category_rows = [{
+        '评测维度': item['label'], '通过 / 总数': f'{item["passed"]} / {item["total"]}',
+        '通过率': f'{item["pass_rate"] * 100:.2f}%', '样本量': f'n={item["total"]}',
+    } for item in result['categories'].values()]
+    st.dataframe(pd.DataFrame(category_rows), width='stretch', hide_index=True)
+    detail_rows = [{
+        'Case ID': case['id'], '类别': CATEGORY_LABELS.get(case['category'], case['category']),
+        '问题/场景': case['scenario'], 'Expected': json.dumps(case['expected'], ensure_ascii=False),
+        'Actual': json.dumps(case['actual'], ensure_ascii=False),
+        '状态': '通过' if case['passed'] else '失败', '耗时(ms)': case['duration_ms'],
+        '错误': case['error'] or '',
+    } for case in result['cases']]
+    st.markdown('#### Case 明细')
+    st.dataframe(pd.DataFrame(detail_rows), width='stretch', hide_index=True)
+    st.download_button(
+        '下载 Benchmark JSON', json.dumps(result, ensure_ascii=False, indent=2).encode('utf-8'),
+        file_name=f'benchmark_{result["suite_version"]}.json', mime='application/json',
+    )
 
 
 def main() -> None:

@@ -28,17 +28,10 @@ def test_evaluation_page_does_not_claim_unrun_metrics():
     app.radio[0].set_value('评测中心').run()
 
     page_text = '\n'.join(item.value for item in [*app.markdown, *app.caption])
-    assert '不展示百分比' in page_text
+    assert '未运行时不展示准确率' in page_text
     evaluation = app.dataframe[0].value.set_index('评测维度')
-    assert evaluation.loc['多轮上下文', '当前状态'] == '本阶段可检查'
-    assert evaluation.loc['多轮上下文', '依据'] == 'Phase 2 自动化多轮测试'
-    assert evaluation.loc['条件澄清', '当前状态'] == '本阶段可检查'
-    assert evaluation.loc['条件澄清', '依据'] == 'Phase 2 澄清与恢复测试'
-    assert evaluation.loc['Text-to-SQL 与纠错', '当前状态'] == '本阶段可检查'
-    assert evaluation.loc['Text-to-SQL 与纠错', '依据'] == 'Phase 3 SQL 生成、安全校验、执行与纠错自动化测试'
-    captions = '\n'.join(item.value for item in app.caption)
-    assert 'Phase 4 页级 RAG 与 SQL/RAG 融合均已有自动化检查' in captions
-    assert '正式准确率与性能 Benchmark 留待 Phase 5' in captions
+    assert set(evaluation['当前状态']) == {'尚未运行'}
+    assert set(evaluation['依据']) == {'点击“运行本地 Benchmark”'}
 
 
 def _widget_by_label(widgets, label):
