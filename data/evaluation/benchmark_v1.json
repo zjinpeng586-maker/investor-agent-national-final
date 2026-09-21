@@ -1,0 +1,40 @@
+{
+  "suite_id": "financial_qa_deterministic_v1",
+  "version": "1.0.0",
+  "description": "Phase 2-4 deterministic local regression benchmark",
+  "cases": [
+    {"id":"conv_year_followup","category":"conversation","turns":["比亚迪2024年营业收入是多少？","那2023年呢？"],"expected":{"status":"ready","companies":["比亚迪股份有限公司"],"years":[2023],"metrics":["revenue"],"intent":"finance_query"}},
+    {"id":"conv_company_followup","category":"conversation","turns":["比亚迪2024年净利润是多少？","宁德时代呢？"],"expected":{"status":"ready","companies":["宁德时代新能源科技股份有限公司"],"years":[2024],"metrics":["net_profit"],"intent":"finance_query"}},
+    {"id":"conv_four_turns","category":"conversation","turns":["比亚迪2024年营收","那2023年呢","宁德时代呢","净利润呢"],"expected":{"status":"ready","companies":["宁德时代新能源科技股份有限公司"],"years":[2023],"metrics":["net_profit"],"intent":"finance_query"}},
+    {"id":"conv_explicit_override","category":"conversation","turns":["比亚迪2024年营业收入是多少？","宁德时代2025年净利润是多少？"],"expected":{"status":"ready","companies":["宁德时代新能源科技股份有限公司"],"years":[2025],"metrics":["net_profit"],"intent":"finance_query"}},
+    {"id":"conv_metric_clarification","category":"conversation","turns":["比亚迪财务数据是多少？"],"expected":{"status":"needs_clarification","field":"metric"}},
+
+    {"id":"plan_sql","category":"planner","question":"比亚迪2024年营业收入是多少？","context":{"intent":"finance_query","companies":["比亚迪股份有限公司"],"years":[2024],"metrics":["revenue"]},"expected":{"route":"sql"}},
+    {"id":"plan_rag","category":"planner","question":"比亚迪2024年年报如何描述研发投入？","context":{"intent":"unknown","companies":["比亚迪股份有限公司"],"years":[2024],"metrics":[]},"expected":{"route":"rag"}},
+    {"id":"plan_hybrid_reason","category":"planner","question":"比亚迪2024年净利润为什么变化？","context":{"intent":"trend_analysis","companies":["比亚迪股份有限公司"],"years":[2024],"metrics":["net_profit"]},"expected":{"route":"hybrid","structured_intent":"trend_analysis"}},
+    {"id":"plan_hybrid_report_number","category":"planner","question":"比亚迪2024年年报中的净利润是多少？","context":{"intent":"finance_query","companies":["比亚迪股份有限公司"],"years":[2024],"metrics":["net_profit"]},"expected":{"route":"hybrid","structured_intent":"finance_query"}},
+    {"id":"plan_hybrid_compare","category":"planner","question":"比亚迪和宁德时代财务表现差异可能来自哪些业务因素？","context":{"intent":"unknown","companies":["比亚迪股份有限公司","宁德时代新能源科技股份有限公司"],"years":[],"metrics":[]},"expected":{"route":"hybrid","structured_intent":"company_compare"}},
+
+    {"id":"sql_byd_2024_revenue","category":"text_to_sql","context":{"intent":"finance_query","companies":["比亚迪股份有限公司"],"years":[2024],"metrics":["revenue"]},"expected":{"rows":[{"company":"比亚迪股份有限公司","year":2024,"revenue":7771.02}]}},
+    {"id":"sql_byd_2024_profit","category":"text_to_sql","context":{"intent":"finance_query","companies":["比亚迪股份有限公司"],"years":[2024],"metrics":["net_profit"]},"expected":{"rows":[{"company":"比亚迪股份有限公司","year":2024,"net_profit":402.54}]}},
+    {"id":"sql_byd_two_year_revenue","category":"text_to_sql","context":{"intent":"finance_query","companies":["比亚迪股份有限公司"],"years":[2023,2024],"metrics":["revenue"]},"expected":{"rows":[{"company":"比亚迪股份有限公司","year":2023,"revenue":6023.15},{"company":"比亚迪股份有限公司","year":2024,"revenue":7771.02}]}},
+    {"id":"sql_byd_multi_metric","category":"text_to_sql","context":{"intent":"finance_query","companies":["比亚迪股份有限公司"],"years":[2024],"metrics":["revenue","net_profit","operating_cashflow"]},"expected":{"rows":[{"company":"比亚迪股份有限公司","year":2024,"revenue":7771.02,"net_profit":402.54,"operating_cashflow":1334.54}]}},
+    {"id":"sql_compare_2024","category":"text_to_sql","context":{"intent":"company_compare","companies":["比亚迪股份有限公司","宁德时代新能源科技股份有限公司"],"years":[2024],"metrics":[]},"expected":{"rows":[{"company":"比亚迪股份有限公司","year":2024,"revenue":7771.02,"net_profit":402.54,"operating_cashflow":1334.54},{"company":"宁德时代新能源科技股份有限公司","year":2024,"revenue":3620.13,"net_profit":507.45,"operating_cashflow":969.90}]}},
+
+    {"id":"security_insert","category":"sql_security","sql":"INSERT INTO companies(name) VALUES ('x')","expected":{"blocked":true}},
+    {"id":"security_update","category":"sql_security","sql":"UPDATE companies SET name='x'","expected":{"blocked":true}},
+    {"id":"security_delete","category":"sql_security","sql":"DELETE FROM companies","expected":{"blocked":true}},
+    {"id":"security_drop","category":"sql_security","sql":"DROP TABLE companies","expected":{"blocked":true}},
+    {"id":"security_pragma","category":"sql_security","sql":"PRAGMA table_info(companies)","expected":{"blocked":true}},
+    {"id":"security_attach","category":"sql_security","sql":"ATTACH DATABASE 'x.db' AS x","expected":{"blocked":true}},
+    {"id":"security_multi_statement","category":"sql_security","sql":"SELECT * FROM companies; DELETE FROM companies","expected":{"blocked":true}},
+    {"id":"security_system_table","category":"sql_security","sql":"SELECT * FROM sqlite_master","expected":{"blocked":true}},
+    {"id":"security_legal_select","category":"sql_security","sql":"SELECT name FROM companies ORDER BY name LIMIT 1","expected":{"blocked":false}},
+
+    {"id":"rag_research_page","category":"rag_citation","question":"年报如何描述研发投入？","context":{"companies":["比亚迪股份有限公司"],"years":[2024],"metrics":[]},"expected":{"status":"success","first_page":1}},
+    {"id":"rag_overseas_page","category":"rag_citation","question":"海外市场有哪些汇率和政策风险？","context":{"companies":["比亚迪股份有限公司"],"years":[2024],"metrics":[]},"expected":{"status":"success","first_page":2}},
+    {"id":"rag_profit_reason_page","category":"rag_citation","question":"为什么净利润变化？主要原因是什么？","context":{"companies":["比亚迪股份有限公司"],"years":[2024],"metrics":["net_profit"]},"expected":{"status":"success","first_page":5,"excluded_pages":[3,4]}},
+    {"id":"rag_unrelated","category":"rag_citation","question":"员工食堂本周菜谱是什么？","context":{"companies":["比亚迪股份有限公司"],"years":[2024],"metrics":[]},"expected":{"status":"no_evidence"}},
+    {"id":"rag_numeric_without_reason","category":"rag_citation","variant":"numeric_only","question":"为什么净利润变化？主要原因是什么？","context":{"companies":["比亚迪股份有限公司"],"years":[2024],"metrics":["net_profit"]},"expected":{"status":"no_evidence"}}
+  ]
+}

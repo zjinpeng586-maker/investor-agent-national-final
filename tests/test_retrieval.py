@@ -307,5 +307,5 @@ def test_phase4_ui_citations_process_library_and_evaluation(rag_document):
 
     app.radio[0].set_value('评测中心').run()
     evaluation = app.dataframe[0].value.set_index('评测维度')
-    assert evaluation.loc['研报 RAG', '当前状态'] == '本阶段可检查'
-    assert evaluation.loc['研报 RAG', '依据'] == 'Phase 4 页级索引、检索、引用与 SQL/RAG 融合自动化测试'
+    assert evaluation.loc['RAG 页码与证据', '当前状态'] == '尚未运行'
+    assert evaluation.loc['RAG 页码与证据', '依据'] == '点击“运行本地 Benchmark”'
