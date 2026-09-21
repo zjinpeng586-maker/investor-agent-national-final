@@ -396,7 +396,10 @@ def render_answer_card(item: dict, data_map: dict[str, pd.DataFrame], name_to_id
             retrieval = result.get('retrieval_result') or {}
             st.write(f'查询规划：{query_plan.get("route", "sql").upper()}')
             st.caption(query_plan.get('reason', ''))
-            st.write(f'1. 已识别任务：{parsed.get("intent", "unknown")}')
+            analysis_intent = result.get('analysis_intent') or parsed.get('intent', 'unknown')
+            st.write(f'1. 已识别任务：{analysis_intent}')
+            if analysis_intent != parsed.get('intent'):
+                st.caption(f'原始解析：{parsed.get("intent", "unknown")}｜结构化子任务：{analysis_intent}')
             st.write(f'2. 已识别企业与期间：{company} / {years}')
             if sql_result.get('sql_status') in {'success', 'fallback'}:
                 source_label = {

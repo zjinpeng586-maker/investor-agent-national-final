@@ -159,21 +159,24 @@ def answer_question(
     llm_config: dict | str | None = None,
     resolved_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    parsed = parse_question(question, all_company_names, selected_company, profile, llm_config if llm_config else None)
+    raw_parsed = parse_question(question, all_company_names, selected_company, profile, llm_config if llm_config else None)
+    parsed = dict(raw_parsed)
     if resolved_context:
         parsed.update({
             key: resolved_context[key]
             for key in ['intent', 'companies', 'years', 'metrics', 'investor_profile', 'reason']
             if key in resolved_context
         })
+        if len(raw_parsed.get('companies') or []) > 1 and len(parsed.get('companies') or []) < 2:
+            parsed['companies'] = raw_parsed['companies']
     intent = parsed.get('intent') or 'unknown'
-    agent_trace = build_agent_trace(intent, parsed)
     companies = parsed.get('companies') or [selected_company]
     years = parsed.get('years') or []
     metrics = parsed.get('metrics') or []
     investor_profile = parsed.get('investor_profile') or profile
     query_plan = plan_query(question, parsed)
     analysis_intent = query_plan.get('structured_intent') or intent
+    agent_trace = build_agent_trace(analysis_intent, {**parsed, 'intent': analysis_intent})
 
     # keep at most two companies for comparison
     primary = companies[0] if companies else selected_company
@@ -305,4 +308,5 @@ def answer_question(
         'sql_status': sql_result.get('sql_status', 'not_applicable'),
         'query_plan': query_plan,
         'retrieval_result': retrieval_result,
+        'analysis_intent': analysis_intent,
     }

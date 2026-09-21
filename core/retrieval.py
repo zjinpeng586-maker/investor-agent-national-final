@@ -21,6 +21,11 @@ METRIC_ALIASES = {
     'gross_margin': ['毛利率', '销售毛利率'],
     'eps': ['每股收益', 'EPS'],
 }
+EXPLANATION_QUERY_TERMS = {'为什么', '原因', '如何解释', '怎么解释', '主要原因', '业务因素'}
+EXPLANATION_CUES = {
+    '原因', '由于', '主要系', '主要由于', '主要受到', '导致', '影响',
+    '变动原因', '增长主要', '下降主要', '同比变化主要',
+}
 
 
 def is_rag_eligible_report(report: dict[str, Any]) -> bool:
@@ -36,6 +41,10 @@ def build_retrieval_query(question: str, resolved_context: dict[str, Any]) -> st
     for metric in resolved_context.get('metrics') or []:
         parts.extend(METRIC_ALIASES.get(metric, [metric]))
     return ' '.join(part for part in parts if part)
+
+
+def is_explanation_query(question: str) -> bool:
+    return any(term in question for term in EXPLANATION_QUERY_TERMS)
 
 
 def extract_pdf_pages(file_path: str | Path) -> list[dict[str, Any]]:
@@ -243,6 +252,11 @@ def retrieve_documents(
         raw_matches = rank_chunks(question, all_chunks, top_k=max(1, len(all_chunks)))
         matched_chunks = {item.get('chunk_id') for item in raw_matches}
         all_chunks = [chunk for chunk in all_chunks if chunk.get('chunk_id') in matched_chunks]
+    if is_explanation_query(question):
+        all_chunks = [
+            chunk for chunk in all_chunks
+            if any(cue in chunk.get('text', '') for cue in EXPLANATION_CUES)
+        ]
     hits = rank_chunks(retrieval_query, all_chunks, top_k)
     citations = []
     for number, hit in enumerate(hits, 1):

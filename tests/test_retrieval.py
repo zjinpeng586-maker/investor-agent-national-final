@@ -21,6 +21,7 @@ from core.retrieval import (
     chunk_pages,
     extract_pdf_pages,
     get_index_status,
+    is_explanation_query,
     is_rag_eligible_report,
     retrieve_documents,
 )
@@ -44,6 +45,7 @@ def rag_document(tmp_path_factory):
         '公司2024年持续加大新能源汽车研发投入，重点推进电池和智能化技术。',
         '海外市场拓展面临汇率波动及地区政策风险，公司将加强风险管理。',
         '管理层认为毛利率变化主要受到产品结构调整影响。',
+        '2024年归属于上市公司股东的净利润为402.54亿元。',
         '公司归母净利润变化主要受到期间费用、产品结构及市场竞争影响。',
     ]
     for text in pages:
@@ -74,11 +76,11 @@ def rag_document(tmp_path_factory):
 
 def test_page_extraction_and_chunks_keep_real_page_numbers(rag_document):
     pages = extract_pdf_pages(rag_document['path'])
-    assert [page['page'] for page in pages] == [1, 2, 3, 4]
+    assert [page['page'] for page in pages] == [1, 2, 3, 4, 5]
     assert '研发投入' in pages[0]['text']
     chunks = chunk_pages(pages, rag_document['report'], chunk_size=24, overlap=5)
     assert chunks
-    assert all(chunk['page'] in {1, 2, 3, 4} for chunk in chunks)
+    assert all(chunk['page'] in {1, 2, 3, 4, 5} for chunk in chunks)
     assert all('研发投入' not in chunk['text'] or chunk['page'] == 1 for chunk in chunks)
     assert all('汇率波动' not in chunk['text'] or chunk['page'] == 2 for chunk in chunks)
 
@@ -87,7 +89,7 @@ def test_lazy_sidecar_index_and_page_level_retrieval(rag_document):
     report = rag_document['report']
     assert get_index_status(report, rag_document['index_root']) == '待首次查询建立'
     index = build_document_index(report, rag_document['index_root'])
-    assert index['page_count'] == 4
+    assert index['page_count'] == 5
     assert index['chunks']
     assert get_index_status(report, rag_document['index_root']) == '已建立'
 
@@ -176,6 +178,7 @@ def test_retrieval_query_includes_resolved_metric_aliases():
     assert '2024' in query
     assert '净利润' in query
     assert '归属于上市公司股东的净利润' in query
+    assert is_explanation_query('为什么会出现这种变化？') is True
 
 
 def test_hybrid_keeps_sql_numbers_and_adds_real_document_citation(rag_document):
@@ -204,9 +207,30 @@ def test_hybrid_keeps_sql_numbers_and_adds_real_document_citation(rag_document):
     assert f'{sql_value:.2f}' in result['answer']
     assert result['retrieval_result']['status'] == 'success'
     pages = [citation['page'] for citation in result['retrieval_result']['citations']]
-    assert pages[0] == 4
+    assert pages[0] == 5
+    assert 4 not in pages
     assert 3 not in pages
-    assert 'PDF第4页' in result['evidence']
+    assert 'PDF第5页' in result['evidence']
+
+
+def test_explanation_query_rejects_metric_only_numeric_page(tmp_path):
+    pdf_path = tmp_path / 'only-number.pdf'
+    pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+    canvas = Canvas(str(pdf_path))
+    canvas.setFont('STSong-Light', 12)
+    canvas.drawString(72, 720, '2024年归属于上市公司股东的净利润为402.54亿元。')
+    canvas.save()
+    report = {
+        'id': 501, 'company_name': BYD, 'report_year': 2024,
+        'file_name': pdf_path.name, 'file_path': str(pdf_path), 'file_type': 'PDF',
+    }
+    result = retrieve_documents(
+        '为什么会出现这种变化？年报里是怎么解释的？',
+        {'companies': [BYD], 'years': [2024], 'metrics': ['net_profit']},
+        [report], tmp_path / 'index',
+    )
+    assert result['status'] == 'no_evidence'
+    assert result['citations'] == []
 
 
 def test_multi_company_hybrid_runs_company_compare_sql(rag_document):
@@ -218,9 +242,20 @@ def test_multi_company_hybrid_runs_company_compare_sql(rag_document):
     )
     assert result['query_plan']['route'] == 'hybrid'
     assert result['query_plan']['structured_intent'] == 'company_compare'
+    assert result['analysis_intent'] == 'company_compare'
     assert result['sql_result']['status'] == 'success'
     assert {row['company'] for row in result['sql_result']['rows']} == {BYD, CATL}
     assert result['retrieval_result']['status'] in {'success', 'no_evidence'}
+
+
+def test_multi_company_hybrid_ui_shows_effective_and_original_intents(rag_document):
+    app = AppTest.from_file(APP_PATH, default_timeout=30).run()
+    app.text_area[0].set_value('比亚迪和宁德时代财务表现差异可能来自哪些业务因素？')
+    next(button for button in app.button if button.label == '开始分析').click().run()
+    assert not app.exception
+    visible = '\n'.join(str(item.value) for item in [*app.markdown, *app.text, *app.caption])
+    assert '已识别任务：company_compare' in visible
+    assert '原始解析：unknown｜结构化子任务：company_compare' in visible
 
 
 def test_phase4_ui_citations_process_library_and_evaluation(rag_document):
