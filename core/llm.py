@@ -140,7 +140,7 @@ def polish_answer_with_llm(config_or_key: dict[str, str] | str, question: str, e
 
 def enhance_report_with_llm(config_or_key: dict[str, str] | str, report_text: str, company: str, investor_profile: str = '平衡型') -> str:
     prompt = f'''
-你是投资者智能分析助手的报告润色模块。请在不改变原始数据、不新增未经证实数字的前提下，对以下报告做专业化润色。
+你是财报智问 V2.0 的报告润色模块。请在不改变原始数据、不新增未经证实数字的前提下，对以下报告做专业化润色。
 要求：
 1. 保留原报告的标题层级和全部关键数据。
 2. 语言更像正式投资研究报告，适合正式分析报告展示。
