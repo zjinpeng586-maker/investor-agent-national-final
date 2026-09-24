@@ -1,8 +1,12 @@
-财报智问可靠性修订版
+擎梦数智｜财报智问
+上市公司财务智能分析平台 · 参赛作品
 
-Windows：首次 install_windows.bat；以后 run_streamlit.bat。
-macOS：首次 bash install_mac.sh；以后 bash run_streamlit_mac.sh。
-需要 Python 3.11，日常启动不安装依赖。
+完整作品介绍与双系统运行指南：README.md
 
-请阅读 README.md、docs/Windows本地运行说明.md 和 docs/macOS本地运行说明.md。
-数据使用独立持久目录；个人库需先预览确认再导入。备份/旧库迁移步骤以最新说明为准。
+运行环境：Python 3.11（安装脚本要求）。
+Windows：首次运行 install_windows.bat；日常运行 run_streamlit.bat。
+macOS：首次执行 bash install_mac.sh；日常执行 bash run_streamlit_mac.sh。
+本地地址：http://127.0.0.1:8501
+
+归因功能：进入“财报问数”，输入“比亚迪2024年净利润为什么变化？”。
+在回答摘要下方查看“数因融合财务归因”及数据、报告依据。

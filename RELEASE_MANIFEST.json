@@ -1,7 +1,7 @@
 {
-  "version": "财报智问_星月UI归因树版_20260924",
+  "version": "财报智问_星月UI归因树版_20260925_封板版",
   "pdf_layout_revision": "2026-09-24-branding-wrapped-tables-v3",
-  "revision": "2026-09-24-branding-v1",
+  "revision": "2026-09-25-attribution-query-review",
   "schema_version": 3,
   "files": [
     {
@@ -26,8 +26,8 @@
     },
     {
       "file": "README.md",
-      "sha256": "998963ff3bef46e5a2329d0928f42dbb8155ce0aac464a3ca426c7958741d0f2",
-      "size": 7417
+      "sha256": "436b30da773cb4c04cb917b4ded3b82a45639d7298687f8fe2c1b4d46817013a",
+      "size": 20409
     },
     {
       "file": "app/assets/brand/qingmeng-shuzhi-logo.png",
@@ -141,13 +141,13 @@
     },
     {
       "file": "core/planner.py",
-      "sha256": "de43696f06387ad4f7634cb399c2e4602b2adfc1112acd8c57b87cc9fdfc4ee1",
-      "size": 2182
+      "sha256": "487e0ecb3332363a57a8eeab673466aa401194d615bb8c5f65bc1053ecbf17f5",
+      "size": 2135
     },
     {
       "file": "core/qa_engine.py",
-      "sha256": "7b19f4ee4016bcb72832e38fd115c21b099106ab17649797f667fdbb1a4311e3",
-      "size": 34798
+      "sha256": "098ed295266e95d9e3ef5bcbd4fdd3bd76562edd50a06c02e3daf969de7817d8",
+      "size": 36059
     },
     {
       "file": "core/report_pdf.py",
@@ -156,8 +156,8 @@
     },
     {
       "file": "core/retrieval.py",
-      "sha256": "108b3aef0be4e8b7454a33e272e46c9a5dd43af7ddc8244c63b2f6b7f3173678",
-      "size": 22861
+      "sha256": "b9e23dc66515281c4de24aff0c8d20be2bb16420c3084400b80bef6c6b8f2c01",
+      "size": 23690
     },
     {
       "file": "core/seed.py",
@@ -245,6 +245,11 @@
       "size": 746
     },
     {
+      "file": "docs/20260925归因问答修复与验收.md",
+      "sha256": "49e4b660a1676a1c527787ab442c50f5618f778455f5bf635547fb5f8f7da256",
+      "size": 3331
+    },
+    {
       "file": "docs/FINAL_ACCEPTANCE.md",
       "sha256": "c2f6556a03aa9dbffa726c3448a8637ff707df45117583ba101182d88987dd8b",
       "size": 3793
@@ -286,13 +291,13 @@
     },
     {
       "file": "docs/Windows本地运行说明.md",
-      "sha256": "c9d59c6e872d38db00d51f853ae5cd763f9e0dd3bbdcda1dce588b9bfbe63395",
-      "size": 8454
+      "sha256": "f994a736aa153acb7faef7fc485b5668829143cee25416e822dcceb2c9980781",
+      "size": 183
     },
     {
       "file": "docs/macOS本地运行说明.md",
-      "sha256": "9d71d05995d767fed5cb2550d06f9dca448ab2d4bfe4f223a9ef3ff78c08d8d0",
-      "size": 8468
+      "sha256": "624738145ce6a6d2b392f528c58565d5ee741652a22a7dccfecda4de8dca20bc",
+      "size": 181
     },
     {
       "file": "docs/validation/attribution-verification.json",
@@ -343,6 +348,11 @@
       "file": "docs/归因树功能与验收.md",
       "sha256": "568d3beed47a6cde018de327648088bc26f297d35b1591cd1f99b6f27da79ef8",
       "size": 7766
+    },
+    {
+      "file": "docs/技术说明书.md",
+      "sha256": "fd1f257e8e023b88b99fc975ab69e8a95893b38e605a831da1675307e440c288",
+      "size": 9539
     },
     {
       "file": "docs/统一资料库与公开披露说明.md",
@@ -421,8 +431,8 @@
     },
     {
       "file": "scripts/run_benchmark.py",
-      "sha256": "688acda221dba61c791b018032dc57c62585ed24e4976f0b0c4673ec054abadb",
-      "size": 424
+      "sha256": "160be6129548a4bcbdf68b1d81d8b062794ec195476016b337a4647b379b89be",
+      "size": 431
     },
     {
       "file": "scripts/test_online_disclosure_parser.py",
@@ -466,8 +476,8 @@
     },
     {
       "file": "tests/test_attribution_integration.py",
-      "sha256": "fbed27ba9fd707268a5f0b4ad05cad37f993cd25cac5aa2773f93b772b1441e4",
-      "size": 9572
+      "sha256": "de4423d2f75639f835ef1feed34816fd40e9bf3ea306b7ddf8ea972928e5cc3c",
+      "size": 11631
     },
     {
       "file": "tests/test_attribution_ui.py",
@@ -540,6 +550,11 @@
       "size": 21850
     },
     {
+      "file": "tests/test_release_review.py",
+      "sha256": "20082f09e028bdbdd8d98a696e41975887927b371c507406aae00dca4c6311df",
+      "size": 1630
+    },
+    {
       "file": "tests/test_reliability_ui.py",
       "sha256": "60c7897cd12988316fcacb8500361db0d34695d2edfa0bead21d7fdca20bdad9",
       "size": 11497
@@ -591,13 +606,13 @@
     },
     {
       "file": "新版使用说明.md",
-      "sha256": "955aa3cc987ee106e33b7ddcf1ad29626b1400ee2d5821a80844cbf665b03904",
-      "size": 2623
+      "sha256": "aeb20502c81700bec2a76df53cd7f60978a56809c87701db654e0535f7444662",
+      "size": 409
     },
     {
       "file": "请先阅读-运行说明.txt",
-      "sha256": "b0d00cd3df8dbbf00977709acebbaf7c8cba881014a5507f7d19a08947eb4281",
-      "size": 450
+      "sha256": "ede27f70c1b0d8e69e106d9ecc4c81b2aa3f7c97e0dc504db6239d83af182a89",
+      "size": 580
     }
   ]
 }

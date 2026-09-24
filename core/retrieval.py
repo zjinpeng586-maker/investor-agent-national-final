@@ -13,7 +13,7 @@ from core.parsers import _document_report_year, _extract_company
 
 
 INDEX_ROOT = ROOT / 'data' / 'rag_index'
-INDEX_SCHEMA_VERSION = 3
+INDEX_SCHEMA_VERSION = 4
 NO_EVIDENCE = '当前未检索到足以支持该问题的可核验文档证据。'
 METRIC_ALIASES = {
     'revenue': ['营业收入', '营收', '收入'],
@@ -24,7 +24,7 @@ METRIC_ALIASES = {
     'gross_margin': ['毛利率', '销售毛利率'],
     'eps': ['每股收益', 'EPS'],
 }
-EXPLANATION_QUERY_TERMS = {'为什么', '原因', '如何解释', '怎么解释', '主要原因', '业务因素'}
+EXPLANATION_QUERY_TERMS = {'为什么', '为何', '原因', '如何解释', '怎么解释', '主要原因', '业务因素', '归因'}
 EXPLANATION_CUES = {'主要系', '主要由于', '原因是', '由于', '导致', '变化主要受到'}
 
 
@@ -130,6 +130,7 @@ def _document_scope_check(pages: list[dict[str, Any]], report: dict[str, Any]) -
     page_headers = [str(page.get('text', '')).splitlines()[:12] for page in pages[:4]]
     header_text = '\n'.join('\n'.join(lines)[:700] for lines in page_headers)
     document_year = _document_report_year(header_text)
+    interim_title = bool(re.search(r'20\d{2}\s*年?\s*(?:半年度|上半年|下半年|第?[一二三四1234]季度)\s*(?:报告|财务报告)', header_text))
     document_company = None
     for lines in page_headers:
         for position, line in enumerate(lines):
@@ -156,6 +157,7 @@ def _document_scope_check(pages: list[dict[str, Any]], report: dict[str, Any]) -
     verified = document_year is not None and document_company is not None
     return {'status': 'scope_mismatch' if conflicts else ('verified' if verified else 'partial' if document_year is not None or document_company else 'metadata_only'),
             'document_year': document_year, 'document_company': document_company,
+            'interim_report': interim_title,
             'metadata_year': expected_year, 'metadata_company': expected_company,
             'error': '；'.join(conflicts),
             'note': ('正文范围与来源记录冲突，拒绝用于回答。' if conflicts else
@@ -352,6 +354,10 @@ def retrieve_documents(
     selected = exact
     if resolved_context.get('period') not in {None, '', 'annual'}:
         selected = [row for row in selected if row.get('report_period') == resolved_context.get('period')]
+    else:
+        selected = [row for row in selected if not re.search(
+            r'半年|季度|(?<![A-Za-z])[Qq][1-4](?!\d)',
+            ' '.join(str(row.get(key) or '') for key in ('report_type', 'report_title', 'file_name')))]
     missing_scope = [{'company': company, 'year': year} for company in companies for year in years
                      if not any(row.get('company_name') == company and str(row.get('report_year')) == str(year) for row in selected)]
     all_chunks, indexed_documents = [], 0
@@ -364,6 +370,11 @@ def retrieve_documents(
                      'status': index.get('status'), 'scope_verification': index.get('scope_verification'),
                      'reason': index.get('error') or (index.get('scope_verification') or {}).get('note', '')}
             document_checks.append(check)
+            if (resolved_context.get('period') in {None, '', 'annual'}
+                    and (index.get('scope_verification') or {}).get('interim_report')):
+                check.update(status='scope_mismatch', reason='正文标题为半年或季度报告，不能作为年度问题依据。')
+                rejected_documents.append(check)
+                continue
             if index.get('status') == 'scope_mismatch':
                 rejected_documents.append(check)
                 continue

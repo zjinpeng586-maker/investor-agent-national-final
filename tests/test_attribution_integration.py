@@ -37,6 +37,47 @@ def ask(data, question, **kwargs):
 
 
 @pytest.mark.parametrize('question', [
+    '比亚迪2024年净利润为什么变化？',
+    '比亚迪2024年净利润增长的主要原因是什么？',
+    '比亚迪2024年净利润为何增长？',
+    '比亚迪2024年净利润归因分析',
+    '比亚迪2024年净利润怎么解释？',
+    '比亚迪2024年净利润变化受业务因素影响的原因是什么？',
+])
+def test_explanation_wording_uses_verified_comparison(data, question):
+    result = ask(data, question)
+    assert result['attribution']['status'] == 'success'
+    assert result['sql_result']['status'] == 'success'
+    assert result['parsed']['years'] == [2024]
+    assert {row['year'] for row in result['sql_result']['rows']} == {2024}
+    assert '300.41' in result['answer'] and '402.54' in result['answer']
+    assert '+34.00%' in result['answer']
+    assert '仅有一个年度' not in result['answer']
+    assert '缺少相邻年度' not in result['answer']
+    assert '反映归属于上市公司股东' not in result['answer']
+
+
+@pytest.mark.parametrize('question', ['净利润是什么？', '净利润是什么意思？'])
+def test_plain_definition_stays_definition(data, question):
+    result = ask(data, question)
+    assert result['parsed']['intent'] == 'metric_explain'
+    assert result['attribution'] is None
+
+
+@pytest.mark.parametrize('previous,current', [(0, 10), (-10, -5), (10, 0), (10, 10)])
+def test_summary_matches_tree_for_nonstandard_bases(data, previous, current):
+    company_id = next(row['id'] for row in fetch_companies() if row['name'] == BYD)
+    upsert_metric(company_id, {'year': 2023, 'net_profit': previous, 'raw_source': 'regression'})
+    upsert_metric(company_id, {'year': 2024, 'net_profit': current, 'raw_source': 'regression'})
+    data[BYD] = company_frame(company_id)
+    result = ask(data, '比亚迪2024年净利润为什么变化？')
+    root = result['attribution']['root']
+    assert root['delta'] == current - previous
+    assert root['growth_label'] in result['answer']
+    assert '仅有一个年度' not in result['answer']
+
+
+@pytest.mark.parametrize('question', [
     '比亚迪2024年净利润为什么变化？', '为什么比亚迪2024年净利润增长？',
     '2024年净利润下降的原因是什么？', '净利润变化的主要原因是什么？',
     '比亚迪2024年报告中的净利润为什么变化？',

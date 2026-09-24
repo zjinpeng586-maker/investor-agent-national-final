@@ -173,8 +173,11 @@ def _local_parse(question: str, companies: list[str], default_company: str, sele
         intent = 'out_of_scope'
     elif _contains_any(question, ['会不会涨', '明天涨', '该不该买', '能买吗', '买入', '卖出', '收益保证', '稳赚']):
         intent = 'refusal'
-    elif _contains_any(question, ['报告', '生成报告', '分析报告']):
+    elif ('报告' in question and not (is_explanation_query(question) and metrics)
+          or _contains_any(question, ['生成报告', '生成分析报告', '撰写报告'])):
         intent = 'report_generate'
+    elif is_explanation_query(question) and metrics:
+        intent = 'trend_analysis'
     elif _contains_any(question, ['什么意思', '是什么', '解释']) and metrics:
         intent = 'metric_explain'
     elif _contains_any(question, ['对比', '相比', '谁更', '哪个更', '更适合', '更值得关注']):
@@ -497,8 +500,26 @@ def answer_question(
             for metric in query_metrics
         )
     elif analysis_intent == 'trend_analysis':
-        draft = '\n'.join(trend_text(name, _company_data(name, query_data_map), metric)
-                          for name in companies for metric in (metrics or ['revenue']))
+        summaries = []
+        for name in companies:
+            for metric in (metrics or ['revenue']):
+                if (metric == 'net_profit' and attribution
+                        and attribution.get('status') == 'success'
+                        and name == attribution.get('company')):
+                    root = attribution['root']
+                    direction = {'up': '增加', 'down': '减少', 'flat': '持平'}[root['direction']]
+                    summary = (f'{name}归母净利润：{attribution["previous_year"]}年'
+                               f'{root["previous_value"]:,.2f}亿元 → {attribution["current_year"]}年'
+                               f'{root["current_value"]:,.2f}亿元，{direction}，变动'
+                               f'{root["delta"]:+,.2f}亿元。')
+                    if root['growth_rate'] is not None:
+                        summary += f'{root["growth_label"]} {root["growth_rate"]:+,.2f}%。'
+                    else:
+                        summary += root['growth_label'] + '。'
+                    summaries.append(summary)
+                else:
+                    summaries.append(trend_text(name, _company_data(name, query_data_map), metric))
+        draft = '\n'.join(summaries)
         chart = 'trend'
     elif analysis_intent == 'risk_warning':
         draft = '\n\n'.join(name + '\n' + '；'.join([f'{a["title"]}：{a["message"]}\n规则依据：{a.get("rule", "-")}\n数据依据：{a.get("basis", "-")}\n来源：{a.get("source", "-")}' for a in alert_map.get(name, [])]) for name in companies)
