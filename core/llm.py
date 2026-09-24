@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
+from core.storage import is_public_deployment
 
 PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     'DeepSeek': {
@@ -23,6 +25,56 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         'default_model': 'qwen-plus',
     },
 }
+
+# Cloud models choose relevant educational notes; they never rewrite financial
+# facts. The renderer owns every numeric value, company, period and conclusion.
+EXPLANATION_NOTES = {
+    'revenue': '营业收入反映经营规模，收入增长本身不等于盈利质量改善。',
+    'profit': '净利润反映会计盈利，应结合经营现金流观察盈利的现金转化。',
+    'cashflow': '经营现金流反映经营活动的现金收支，需要结合回款及营运资本分析。',
+    'roe': '净资产收益率需结合盈利水平、资产效率和杠杆一起理解。',
+    'debt': '资产负债率应结合行业特点、债务期限和偿债现金来源理解。',
+    'period': '跨期比较需要保持报告期间、合并范围和指标口径一致。',
+    'evidence': '企业经营原因应以对应报告原文为依据，指标变化本身不能证明因果关系。',
+}
+ENHANCEMENT_MARKER = '\n\n解读提示：\n'
+
+
+def validate_enhancement(draft: str, candidate: str) -> dict[str, Any]:
+    if not isinstance(candidate, str) or not candidate:
+        return {'valid': False, 'reason': '云端输出为空。'}
+    if candidate == draft:
+        return {'valid': True, 'reason': ''}
+    prefix = draft + ENHANCEMENT_MARKER
+    if not candidate.startswith(prefix):
+        return {'valid': False, 'reason': '云端输出试图改写原始事实；已拒绝并保留结构化结果。'}
+    notes = candidate[len(prefix):].splitlines()
+    allowed = set(EXPLANATION_NOTES.values())
+    if not notes or len(notes) > 3 or any(note not in allowed for note in notes):
+        return {'valid': False, 'reason': '云端输出包含未通过程序校验的事实或解释。'}
+    return {'valid': True, 'reason': ''}
+
+
+def _select_explanations(config_or_key: dict[str, str] | str, question: str, draft: str) -> str:
+    prompt = (
+        '你是阅读辅助模块。原始财务事实已经由程序渲染，不允许重写、计算或新增数字。'
+        '从可用解释中选择与用户问题相关的至多三个编号，只返回JSON：{"explanation_ids":[]}。'
+        '无法确定时返回空数组。可用解释：' + json.dumps(EXPLANATION_NOTES, ensure_ascii=False)
+        + '\n用户问题：' + question + '\n已经确认的分析结果：' + draft
+    )
+    raw = _post_chat(config_or_key, [{'role': 'user', 'content': prompt}], temperature=0)
+    data = _extract_json(raw)
+    identifiers = data.get('explanation_ids')
+    if set(data) != {'explanation_ids'} or not isinstance(identifiers, list) or len(identifiers) > 3:
+        raise ValueError('云端解释未返回允许的结构，原始事实保持不变。')
+    if any(not isinstance(item, str) or item not in EXPLANATION_NOTES for item in identifiers):
+        raise ValueError('云端解释包含不受支持的内容。')
+    notes = [EXPLANATION_NOTES[item] for item in dict.fromkeys(identifiers)]
+    candidate = draft + (ENHANCEMENT_MARKER + '\n'.join(notes) if notes else '')
+    validation = validate_enhancement(draft, candidate)
+    if not validation['valid']:
+        raise ValueError(validation['reason'])
+    return candidate
 
 
 def build_llm_config(provider: str, api_key: str, model: str | None = None, base_url: str | None = None) -> dict[str, str]:
@@ -57,6 +109,7 @@ def _post_chat(config_or_key: dict[str, str] | str, messages: list[dict[str, str
     cfg = _normalize_config(config_or_key)
     if not llm_enabled(cfg):
         raise ValueError('云端模型配置不完整')
+    validate_api_endpoint(cfg)
     payload = {
         'model': cfg['model'],
         'messages': messages,
@@ -66,10 +119,27 @@ def _post_chat(config_or_key: dict[str, str] | str, messages: list[dict[str, str
         'Authorization': f"Bearer {cfg['api_key']}",
         'Content-Type': 'application/json',
     }
-    resp = requests.post(f"{cfg['base_url']}/chat/completions", headers=headers, json=payload, timeout=timeout)
+    resp = requests.post(f"{cfg['base_url']}/chat/completions", headers=headers, json=payload,
+                         timeout=(5, min(timeout, 60)), allow_redirects=False)
+    if 300 <= resp.status_code < 400:
+        raise ValueError('模型API不允许重定向；请使用已验证的服务地址。')
     resp.raise_for_status()
     data = resp.json()
     return data['choices'][0]['message']['content'].strip()
+
+
+def validate_api_endpoint(config_or_key: dict[str, str] | str) -> None:
+    cfg = _normalize_config(config_or_key)
+    value = cfg['base_url']
+    url = urlsplit(value)
+    if url.scheme not in {'http', 'https'} or not url.hostname or url.username or url.password or url.query or url.fragment:
+        raise ValueError('模型API必须是无凭据、无查询参数的HTTP(S)服务地址。')
+    if any(char.isspace() for char in value) or '\\' in value:
+        raise ValueError('模型API地址包含非法字符。')
+    if is_public_deployment():
+        preset = PROVIDER_PRESETS.get(cfg['provider'])
+        if not preset or value.rstrip('/') != preset['base_url']:
+            raise ValueError('公共部署仅允许所选服务商的官方HTTPS端点，不允许自定义或内网模型地址。')
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -111,53 +181,15 @@ def parse_question_with_llm(config_or_key: dict[str, str] | str, question: str, 
 
 
 def polish_answer_with_llm(config_or_key: dict[str, str] | str, question: str, evidence: str, draft_answer: str, investor_profile: str = '平衡型') -> str:
-    cfg = _normalize_config(config_or_key)
-    provider = cfg.get('provider', '云端模型')
-    prompt = f'''
-你是一个谨慎、专业、面向投资者的上市公司财务分析助手。请基于“系统证据”和“稳健分析结果”回答用户问题。
-要求：
-1. 只能使用系统证据中的数据，不得编造任何数字或事实。
-2. 不预测短期股价，不给出买入、卖出或保证收益类指令。
-3. 在保留数据结论的基础上，增强解释性、层次感和投资者视角。
-4. 适当从财务表现、风险关注、投资者画像匹配三个角度组织语言。
-5. 结尾保留“仅供研究参考，不构成投资建议”。
-6. 当前投资者画像：{investor_profile}。
-7. 当前云端模型服务：{provider}。
+    return _select_explanations(config_or_key, question, draft_answer)
 
-用户问题：{question}
 
-系统证据：
-{evidence}
-
-稳健分析结果：
-{draft_answer}
-'''
-    return _post_chat(config_or_key, [
-        {'role': 'system', 'content': '你是严谨的上市公司财务分析助手，所有结论必须以系统证据为边界。'},
-        {'role': 'user', 'content': prompt},
-    ], temperature=0.25)
 
 
 def enhance_report_with_llm(config_or_key: dict[str, str] | str, report_text: str, company: str, investor_profile: str = '平衡型') -> str:
-    prompt = f'''
-你是财报智问 V2.0 的报告润色模块。请在不改变原始数据、不新增未经证实数字的前提下，对以下报告做专业化润色。
-要求：
-1. 保留原报告的标题层级和全部关键数据。
-2. 语言更像正式投资研究报告，适合正式分析报告展示。
-3. 加强投资者画像匹配、风险关注点和数据来源可信性的表述。
-4. 不给出买卖建议，不承诺收益。
-5. 结尾保留“仅供研究参考，不构成投资建议”。
+    return _select_explanations(config_or_key, f'{company}财务报告阅读辅助，{investor_profile}', report_text)
 
-企业：{company}
-投资者画像：{investor_profile}
 
-原始报告：
-{report_text}
-'''
-    return _post_chat(config_or_key, [
-        {'role': 'system', 'content': '你是专业投资分析报告编辑，必须以原始报告事实为边界。'},
-        {'role': 'user', 'content': prompt},
-    ], temperature=0.25, timeout=60)
 
 
 # Backward-compatible aliases for modules that may still import old names.

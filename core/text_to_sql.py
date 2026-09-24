@@ -4,8 +4,9 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from typing import Any
+from time import perf_counter
 
-from core.db import DB_PATH
+from core.db import get_db_path
 
 
 ALLOWED_TABLES = {'companies', 'financial_metrics', 'report_files'}
@@ -39,6 +40,8 @@ def build_schema_context() -> str:
 
 
 def generate_sql(resolved_context: dict[str, Any], source: str = 'local') -> SQLPlan:
+    if resolved_context.get('period') not in {None, '', 'annual'}:
+        raise ValueError('当前结构化数据仅提供年度指标，不能替代指定的半年或季度报告期。')
     companies = [name for name in resolved_context.get('companies') or [] if name]
     years = [int(year) for year in resolved_context.get('years') or []]
     intent = resolved_context.get('intent') or 'finance_query'
@@ -130,7 +133,7 @@ def _readonly_authorizer(action, _arg1, _arg2, _database, _trigger):
 
 
 def get_readonly_connection() -> sqlite3.Connection:
-    uri = f'{DB_PATH.resolve().as_uri()}?mode=ro'
+    uri = f'{get_db_path().resolve().as_uri()}?mode=ro'
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA query_only=ON')
@@ -170,15 +173,18 @@ def validate_query_result(result: dict[str, Any], resolved_context: dict[str, An
     if missing_metrics:
         errors.append('结果缺少指标列：' + '、'.join(missing_metrics))
     actual_companies = {row.get('company') for row in rows}
-    if rows and expected_companies and not expected_companies.issubset(actual_companies):
-        errors.append('结果未包含全部预期企业。')
+    if rows and expected_companies and expected_companies != actual_companies:
+        errors.append('结果企业与查询条件不一致。')
     actual_years = {int(row['year']) for row in rows if row.get('year') is not None}
     if rows and expected_years and actual_years != expected_years:
         errors.append('结果年份与查询条件不一致。')
+    actual_pairs = {(row.get('company'), int(row['year'])) for row in rows if row.get('year') is not None}
+    expected_pairs = {(company, year) for company in expected_companies for year in expected_years}
+    if expected_pairs and not expected_pairs.issubset(actual_pairs):
+        errors.append('结果缺少部分企业与年份组合。')
     if rows and expected_metrics:
-        usable = any(any(row.get(metric) is not None for metric in expected_metrics) for row in rows)
-        if not usable:
-            errors.append('预期数值指标均为空。')
+        if any(row.get(metric) is None for row in rows for metric in expected_metrics):
+            errors.append('部分预期数值指标为空，不能作为完整结果。')
     return {'valid': not errors, 'errors': errors}
 
 
@@ -196,6 +202,7 @@ def run_text_to_sql(
     attempts = []
     corrected = False
     for attempt_number in [1, 2]:
+        attempt_started = perf_counter()
         validation = validate_sql(plan.sql, plan.params)
         attempt = {
             'attempt': attempt_number,
@@ -211,7 +218,7 @@ def run_text_to_sql(
             result_validation = validate_query_result(execution, resolved_context)
             if not result_validation['valid']:
                 raise ValueError('；'.join(result_validation['errors']))
-            attempt.update({'status': 'success', 'rows': execution['row_count']})
+            attempt.update({'status': 'success', 'rows': execution['row_count'], 'duration_ms': round((perf_counter() - attempt_started) * 1000, 3)})
             attempts.append(attempt)
             return {
                 'status': 'success', 'sql_status': 'success', 'sql': plan.sql,
@@ -222,7 +229,7 @@ def run_text_to_sql(
                 'schema': build_schema_context(),
             }
         except Exception as exc:
-            attempt.update({'status': 'failed', 'error': str(exc), 'rows': 0})
+            attempt.update({'status': 'failed', 'error': str(exc), 'rows': 0, 'duration_ms': round((perf_counter() - attempt_started) * 1000, 3)})
             attempts.append(attempt)
             if attempt_number == 2:
                 break

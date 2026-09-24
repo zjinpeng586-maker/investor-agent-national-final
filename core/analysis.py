@@ -5,6 +5,8 @@ from typing import Any
 import math
 
 import pandas as pd
+from app.branding import PAGE_TITLE, REPORT_SUBTITLE
+from app.messages import NO_METRICS, NO_SOURCE, public_message
 
 METRIC_LABELS = {
     'revenue': '营业收入',
@@ -97,7 +99,8 @@ def safe_num(v: Any) -> float | None:
     try:
         if v is None or pd.isna(v):
             return None
-        return float(v)
+        value = float(v)
+        return value if math.isfinite(value) else None
     except Exception:
         return None
 
@@ -124,122 +127,200 @@ def previous_row(df: pd.DataFrame) -> pd.Series | None:
     return df.sort_values('year').iloc[-2]
 
 
-def get_source_for_metric(df: pd.DataFrame, year: int | None = None) -> str:
+def get_source_for_metric(df: pd.DataFrame, year: int | None = None, metric_key: str | None = None) -> str:
     if df.empty:
         return '暂无来源记录'
     work = df.sort_values('year')
     if year is not None and 'year' in work.columns:
         one = work[work['year'] == year]
-        if not one.empty:
-            src = one.iloc[-1].get('raw_source')
-            return str(src) if pd.notna(src) else '结构化财务数据表'
-    src = work.iloc[-1].get('raw_source')
-    return str(src) if pd.notna(src) else '结构化财务数据表'
+        if one.empty:
+            return f'未记录{year}年来源，不使用其他年度替代'
+        work = one
+    row = work.iloc[-1]
+    provenance = row.get('metric_provenance')
+    if isinstance(provenance, dict):
+        sources = [provenance.get(metric_key)] if metric_key else list(provenance.values())
+        labels = []
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            label = str(source.get('file_name') or source.get('source_note') or '来源记录')
+            if source.get('page') is not None:
+                label += f'，第{source["page"]}页'
+            if source.get('cell'):
+                label += f'，单元格{source["cell"]}'
+            if source.get('raw_unit'):
+                label += f'，原始单位{source["raw_unit"]}'
+            if source.get('import_id'):
+                label += f'，导入版本{source["import_id"]}'
+            if label not in labels:
+                labels.append(label)
+        if labels:
+            return '；'.join(labels)
+        if metric_key:
+            return '该指标来源未记录，不使用同年其他指标的来源替代'
+    src = row.get('raw_source')
+    return (str(src) + '（旧版行级来源，指标级位置未记录）') if pd.notna(src) and str(src).strip() else '指标来源未记录'
 
 
-def compute_alerts(df: pd.DataFrame) -> list[dict[str, str]]:
-    if df.empty:
-        return []
-    df = df.sort_values('year').reset_index(drop=True)
-    latest = df.iloc[-1]
-    prev = df.iloc[-2] if len(df) >= 2 else None
-    year = int(latest.get('year'))
-    source = get_source_for_metric(df, year)
-    alerts: list[dict[str, str]] = []
+def compute_alerts(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """Report actual rule coverage; absence of evidence is not low risk."""
+    work = clean_financial_df(df)
+    latest = latest_row(work)
+    prior = previous_row(work)
+    year = int(latest['year']) if latest is not None else None
+    source = get_source_for_metric(work, year)
+    alerts: list[dict[str, Any]] = []
+    checked: list[str] = []
+    missing: list[str] = []
+    same_period = (latest is not None and prior is not None
+                   and int(latest['year']) - int(prior['year']) == 1)
 
-    if prev is not None:
-        prev_year = int(prev.get('year'))
-        if safe_num(latest.get('net_profit')) is not None and safe_num(prev.get('net_profit')) not in (None, 0):
-            yoy = (float(latest['net_profit']) - float(prev['net_profit'])) / abs(float(prev['net_profit'])) * 100
-            if yoy < -10:
-                alerts.append({
-                    'level': 'orange',
-                    'title': '净利润下滑预警',
-                    'message': f'{year}年归母净利润同比下降 {abs(yoy):.2f}%，盈利能力出现阶段性承压。',
-                    'rule': 'R01：最近一年归母净利润同比下降超过10%触发预警。',
-                    'basis': f'{prev_year}年归母净利润 {float(prev["net_profit"]):.2f}亿元，{year}年归母净利润 {float(latest["net_profit"]):.2f}亿元。',
-                    'source': source,
-                })
-        if all(safe_num(x) is not None for x in [latest.get('revenue'), prev.get('revenue'), latest.get('net_profit'), prev.get('net_profit')]) and safe_num(prev.get('revenue')) not in (None, 0) and safe_num(prev.get('net_profit')) not in (None, 0):
-            rev_yoy = (float(latest['revenue']) - float(prev['revenue'])) / abs(float(prev['revenue'])) * 100
-            np_yoy = (float(latest['net_profit']) - float(prev['net_profit'])) / abs(float(prev['net_profit'])) * 100
-            if rev_yoy > 0 and np_yoy < 0:
-                alerts.append({
-                    'level': 'yellow',
-                    'title': '增收不增利',
-                    'message': f'{year}年营业收入同比增长 {rev_yoy:.2f}%，但归母净利润同比下降 {abs(np_yoy):.2f}%。',
-                    'rule': 'R02：营业收入增长但归母净利润下降，触发盈利转化效率预警。',
-                    'basis': f'{year}年营收 {float(latest["revenue"]):.2f}亿元，归母净利润 {float(latest["net_profit"]):.2f}亿元。',
-                    'source': source,
-                })
-        if safe_num(latest.get('operating_cashflow')) is not None and safe_num(prev.get('operating_cashflow')) not in (None, 0):
-            cfo_yoy = (float(latest['operating_cashflow']) - float(prev['operating_cashflow'])) / abs(float(prev['operating_cashflow'])) * 100
-            if cfo_yoy < -30:
-                alerts.append({
-                    'level': 'red',
-                    'title': '经营现金流恶化',
-                    'message': f'{year}年经营现金流同比下降 {abs(cfo_yoy):.2f}%，主业现金创造能力需要重点跟踪。',
-                    'rule': 'R03：最近一年经营现金流同比下降超过30%触发高关注预警。',
-                    'basis': f'{prev_year}年经营现金流 {float(prev["operating_cashflow"]):.2f}亿元，{year}年经营现金流 {float(latest["operating_cashflow"]):.2f}亿元。',
-                    'source': source,
-                })
-        if safe_num(latest.get('roe')) is not None and safe_num(prev.get('roe')) is not None:
-            drop = float(prev['roe']) - float(latest['roe'])
-            if drop > 5:
-                alerts.append({
-                    'level': 'orange',
-                    'title': 'ROE大幅下滑',
-                    'message': f'ROE 从 {float(prev["roe"]):.2f}% 降至 {float(latest["roe"]):.2f}%，股东回报效率下降。',
-                    'rule': 'R04：最近一年ROE下降超过5个百分点触发预警。',
-                    'basis': f'{prev_year}年ROE {float(prev["roe"]):.2f}%，{year}年ROE {float(latest["roe"]):.2f}%。',
-                    'source': source,
-                })
-    debt = safe_num(latest.get('debt_ratio'))
-    if debt is not None and debt > 70:
-        alerts.append({
-            'level': 'yellow',
-            'title': '资产负债率偏高',
-            'message': f'{year}年资产负债率为 {debt:.2f}%，财务杠杆处于较高水平。',
-            'rule': 'R05：资产负债率高于70%触发偿债稳健性预警。',
-            'basis': f'{year}年资产负债率 {debt:.2f}%。',
-            'source': source,
-        })
-    audit = str(latest.get('audit_opinion') or '')
-    if audit and audit != 'nan' and '标准' not in audit:
-        alerts.append({
-            'level': 'red',
-            'title': '审计意见关注',
-            'message': f'{year}年审计意见为“{audit}”，需要关注财务报表可信度。',
-            'rule': 'R06：审计意见不是标准无保留意见时触发预警。',
-            'basis': f'{year}年审计意见：{audit}。',
-            'source': source,
-        })
-    if not alerts:
-        alerts.append({
-            'level': 'green',
-            'title': '主要规则未触发',
-            'message': '当前未触发系统内置的主要财务预警规则。',
-            'rule': '系统已检查净利润、营收利润匹配、经营现金流、ROE、资产负债率和审计意见。',
-            'basis': f'最新年度为{year}年，核心指标处于规则阈值以内。',
-            'source': source,
-        })
+    def add(level, title, message, rule, basis):
+        rule_metrics = {'R01': ['net_profit'], 'R02': ['revenue', 'net_profit'],
+                        'R03': ['operating_cashflow'], 'R04': ['roe'],
+                        'R05': ['debt_ratio'], 'R06': ['audit_opinion']}
+        keys = rule_metrics.get(rule[:3], [])
+        used_years = [year] if year is not None else []
+        if keys and rule[:3] in {'R01', 'R02', 'R03', 'R04'} and prior is not None:
+            used_years.insert(0, int(prior['year']))
+        exact_sources = [f'{y}年{METRIC_LABELS.get(key, key)}：{get_source_for_metric(work, y, key)}'
+                         for y in used_years for key in keys]
+        alerts.append(dict(level=level, title=title, message=message,
+                           rule=rule, basis=basis, source='；'.join(exact_sources) or source))
+
+    # Ratio changes are defined only for adjacent years and positive bases.
+    profit_growth = calc_growth(work, 'net_profit')
+    revenue_growth = calc_growth(work, 'revenue')
+    cash_growth = calc_growth(work, 'operating_cashflow')
+    if profit_growth is None:
+        missing.append('R01 净利润同比（需相邻年度及正基数）')
+    else:
+        checked.append('R01')
+        if profit_growth < -10:
+            add('orange', '净利润下滑预警', f'{year}年归母净利润同比下降 {abs(profit_growth):.2f}%。',
+                'R01：相邻年度归母净利润同比下降超过10%。',
+                f'{int(prior["year"])}年{fmt_value("net_profit", prior.get("net_profit"))}；{year}年{fmt_value("net_profit", latest.get("net_profit"))}。')
+    if revenue_growth is None or profit_growth is None:
+        missing.append('R02 营收与利润同比匹配')
+    else:
+        checked.append('R02')
+        if revenue_growth > 0 and profit_growth < 0:
+            add('yellow', '增收不增利', f'{year}年营收同比增长 {revenue_growth:.2f}%，归母净利润同比下降 {abs(profit_growth):.2f}%。',
+                'R02：同一相邻年度区间收入增长但利润下降。',
+                f'{year}年营收{fmt_value("revenue", latest.get("revenue"))}，归母净利润{fmt_value("net_profit", latest.get("net_profit"))}。')
+    if cash_growth is None:
+        missing.append('R03 经营现金流同比（需相邻年度及正基数）')
+    else:
+        checked.append('R03')
+        if cash_growth < -30:
+            add('red', '经营现金流恶化', f'{year}年经营现金流同比下降 {abs(cash_growth):.2f}%。',
+                'R03：相邻年度经营现金流同比下降超过30%。',
+                f'{int(prior["year"])}年{fmt_value("operating_cashflow", prior.get("operating_cashflow"))}；{year}年{fmt_value("operating_cashflow", latest.get("operating_cashflow"))}。')
+    if same_period and all(safe_num(row.get('roe')) is not None for row in [latest, prior]):
+        checked.append('R04')
+        drop = float(prior['roe']) - float(latest['roe'])
+        if drop > 5:
+            add('orange', 'ROE大幅下滑', f'ROE下降 {drop:.2f} 个百分点。',
+                'R04：相邻年度ROE下降超过5个百分点。',
+                f'{int(prior["year"])}年{fmt_value("roe", prior.get("roe"))}；{year}年{fmt_value("roe", latest.get("roe"))}。')
+    else:
+        missing.append('R04 ROE变化')
+    debt = safe_num(latest.get('debt_ratio')) if latest is not None else None
+    if debt is None:
+        missing.append('R05 资产负债率')
+    else:
+        checked.append('R05')
+        if debt > 70:
+            add('yellow', '资产负债率偏高', f'{year}年资产负债率为 {debt:.2f}%。',
+                'R05：资产负债率高于70%。', f'{year}年资产负债率 {debt:.2f}%。')
+    raw_audit = latest.get('audit_opinion') if latest is not None else None
+    audit = '' if raw_audit is None or pd.isna(raw_audit) else str(raw_audit).strip()
+    if audit in {'', 'nan', 'None', '未知', '暂无', '暂无数据', '--'}:
+        missing.append('R06 审计意见')
+    else:
+        checked.append('R06')
+        normal = audit.replace(' ', '').replace('。', '') in {'无保留意见', '标准无保留意见', '标准的无保留意见'}
+        if not normal:
+            add('red', '审计意见关注', f'{year}年审计意见为“{audit}”。',
+                'R06：非标准无保留意见需要进一步核查；无保留意见本身不触发。', f'{year}年审计意见：{audit}。')
+    if missing:
+        add('unknown', '数据不足，无法完整评估风险',
+            '部分规则缺少可用数据；不得据此判断低风险或相对平稳。',
+            '仅对具有完整数据的规则执行检查。', '未完成：' + '；'.join(missing))
+    elif not alerts:
+        add('green', '主要规则未触发', '已执行的六项规则未触发预警；不代表不存在投资风险。',
+            '已检查净利润、营收利润匹配、经营现金流、ROE、资产负债率和审计意见。', f'检查年度：{year}年。')
+    for alert in alerts:
+        alert['checked_rules'] = list(checked)
+        alert['missing_rules'] = list(missing)
+        alert['coverage_complete'] = not missing
     return alerts
 
 
 def calc_growth(df: pd.DataFrame, key: str) -> float | None:
-    if df.empty or len(df) < 2 or key not in df.columns:
+    """Latest annual YoY, never a multi-year interval or a negative-base ratio."""
+    work = clean_financial_df(df)
+    if work.empty or 'year' not in work.columns or len(work) < 2 or key not in work.columns:
         return None
-    df = df.sort_values('year')
-    a = safe_num(df.iloc[-1].get(key))
-    b = safe_num(df.iloc[-2].get(key))
-    if a is None or b in (None, 0):
+    latest, prior = work.iloc[-1], work.iloc[-2]
+    if int(latest['year']) - int(prior['year']) != 1:
         return None
-    return (a - b) / abs(b) * 100
+    current, base = safe_num(latest.get(key)), safe_num(prior.get(key))
+    if current is None or base is None or base <= 0:
+        return None
+    return (current / base - 1) * 100
+
+
+def growth_details(df: pd.DataFrame, key: str) -> dict[str, Any]:
+    """Expose separate interval/YoY/CAGR facts plus the actual missing years."""
+    work = clean_financial_df(df)
+    result = dict(yoy=None, interval_growth=None, cagr=None, start_year=None,
+                  end_year=None, missing_years=[], reason='数据不足')
+    if work.empty or key not in work.columns or 'year' not in work.columns:
+        return result
+    result['start_year'], result['end_year'] = int(work.iloc[0]['year']), int(work.iloc[-1]['year'])
+    years = {int(row['year']) for _, row in work.iterrows() if safe_num(row.get(key)) is not None}
+    result['missing_years'] = [y for y in range(result['start_year'], result['end_year'] + 1) if y not in years]
+    result['yoy'] = calc_growth(work, key)
+    if len(work) < 2:
+        result['reason'] = '仅有一个年度，无法计算增长率'
+        return result
+    base, last = safe_num(work.iloc[0].get(key)), safe_num(work.iloc[-1].get(key))
+    span = result['end_year'] - result['start_year']
+    if base is None or last is None:
+        result['reason'] = '区间起止年度指标缺失，不以其他年度替代'
+    elif base <= 0:
+        result['reason'] = '基期为零或负值，不计算百分比增长率及年化增长'
+    elif span <= 0:
+        result['reason'] = '缺少有效年度区间'
+    else:
+        result['interval_growth'] = (last / base - 1) * 100
+        result['cagr'] = ((last / base) ** (1 / span) - 1) * 100 if last > 0 else None
+        result['reason'] = ('期末值非正，不计算年化增长' if last <= 0 else '')
+    return result
 
 
 def score_breakdown(df: pd.DataFrame) -> dict[str, Any]:
+    df = clean_financial_df(df)
+    missing = []
     if df.empty:
-        return {'total': 0, 'dimensions': {}, 'basis': []}
+        missing.append('无可用财务指标')
+    else:
+        latest = df.iloc[-1]
+        for key in ['revenue', 'net_profit', 'operating_cashflow', 'roe', 'debt_ratio']:
+            if safe_num(latest.get(key)) is None:
+                missing.append(f'{int(latest["year"])}年{METRIC_LABELS[key]}缺失')
+        if safe_num(latest.get('revenue')) is not None and safe_num(latest.get('revenue')) <= 0:
+            missing.append('营业收入非正，净利率无法按常规口径评分')
+        if safe_num(latest.get('net_profit')) == 0:
+            missing.append('净利润为零，现金流/利润比无法评分')
+        for key in ['revenue', 'net_profit']:
+            if calc_growth(df, key) is None:
+                missing.append(f'{METRIC_LABELS[key]}缺少相邻年度有效值或同比基期非正')
+    if missing:
+        return {'total': None, 'dimensions': {}, 'basis': [], 'available': False,
+                'missing': missing, 'reason': '；'.join(missing), 'source': get_source_for_metric(df)}
     df = df.sort_values('year').reset_index(drop=True)
     latest = df.iloc[-1]
     source = get_source_for_metric(df, int(latest.get('year')))
@@ -266,7 +347,7 @@ def score_breakdown(df: pd.DataFrame) -> dict[str, Any]:
     if cfo is not None and net_profit not in (None, 0):
         ratio = cfo / abs(net_profit)
         cash_quality += min(max(ratio * 12, 0), 17)
-        basis.append(f'现金流质量：经营现金流/归母净利润约为{ratio:.2f}。')
+        basis.append(f'现金流质量：经营现金流/归母净利润绝对值约为{ratio:.2f}。')
     elif cfo is not None and cfo > 0:
         cash_quality += 8
     dims['现金流质量'] = round(min(cash_quality, 25), 1)
@@ -297,31 +378,34 @@ def score_breakdown(df: pd.DataFrame) -> dict[str, Any]:
     dims['成长能力'] = round(min(growth, 20), 1)
 
     total = round(sum(dims.values()), 1)
-    return {'total': total, 'dimensions': dims, 'basis': basis, 'source': source}
+    return {'total': total, 'dimensions': dims, 'basis': basis, 'source': source, 'available': True, 'missing': [], 'reason': ''}
 
 
 def score_company(df: pd.DataFrame) -> dict[str, Any]:
     s = score_breakdown(df)
-    return {'score': s['total'], 'detail': s['dimensions'], 'basis': s.get('basis', []), 'source': s.get('source', '')}
+    return {'score': s['total'], 'detail': s['dimensions'], 'basis': s.get('basis', []),
+            'source': s.get('source', ''), 'available': s['available'],
+            'missing': s.get('missing', []), 'reason': s.get('reason', '')}
 
 
-def risk_dashboard(alerts: list[dict[str, str]]) -> dict[str, str]:
-    levels = [a.get('level') for a in alerts]
-    if 'red' in levels:
-        overall = '高关注'
-    elif 'orange' in levels:
-        overall = '中高关注'
-    elif 'yellow' in levels:
-        overall = '中等关注'
-    else:
-        overall = '相对平稳'
-    names = ''.join(a.get('title', '') for a in alerts)
-    return {
-        '综合风险': overall,
-        '盈利能力': '需关注' if '净利润' in names or '增收不增利' in names or 'ROE' in names else '相对平稳',
-        '现金流质量': '需重点关注' if '经营现金流' in names else '相对平稳',
-        '偿债能力': '需关注' if '资产负债率' in names else '相对平稳',
-    }
+def risk_dashboard(alerts: list[dict[str, Any]]) -> dict[str, str]:
+    levels = {a.get('level') for a in alerts}
+    covered = set(rule for a in alerts for rule in a.get('checked_rules', []))
+    incomplete = not alerts or 'unknown' in levels or any(a.get('coverage_complete') is False for a in alerts)
+    overall = ('高关注' if 'red' in levels else '中高关注' if 'orange' in levels
+               else '中等关注' if 'yellow' in levels else '数据不足，无法评估' if incomplete
+               else '已检规则未触发')
+    if incomplete and any(level in levels for level in ['red', 'orange', 'yellow']):
+        overall += '（数据不全）'
+    names = ''.join(a.get('title', '') for a in alerts if a.get('level') != 'unknown')
+    def dimension(rules, tokens):
+        if any(token in names for token in tokens):
+            return '需关注' + ('（数据不全）' if not set(rules) <= covered else '')
+        return '已检规则未触发' if set(rules) <= covered else '数据不足，无法评估'
+    return {'综合风险': overall,
+            '盈利能力': dimension(['R01', 'R02', 'R04'], ['净利润', '增收不增利', 'ROE']),
+            '现金流质量': dimension(['R03'], ['经营现金流']),
+            '偿债能力': dimension(['R05'], ['资产负债率'])}
 
 
 def build_summary(company_name: str, df: pd.DataFrame, alerts: list[dict[str, str]], profile: str = '平衡型') -> str:
@@ -334,51 +418,57 @@ def build_summary(company_name: str, df: pd.DataFrame, alerts: list[dict[str, st
     for key in ['revenue', 'net_profit', 'operating_cashflow', 'roe', 'debt_ratio']:
         if key in df.columns and pd.notna(latest.get(key)):
             parts.append(f'{METRIC_LABELS[key]} {fmt_value(key, latest.get(key))}')
-    top_alert = alerts[0]['title'] if alerts else '暂无重点预警'
+    top_alert = alerts[0]['title'] if alerts else '数据不足，无法评估风险'
     profile_text = PROFILE_RULES.get(profile, PROFILE_RULES['平衡型'])
     return '，'.join(parts) + f'。当前重点关注：{top_alert}。按{profile}投资者视角，{profile_text}本结论仅供研究参考，不构成投资建议。'
 
 
-def compare_companies(name_a: str, df_a: pd.DataFrame, name_b: str, df_b: pd.DataFrame, profile: str = '平衡型') -> dict[str, Any]:
-    df_a = df_a.sort_values('year').reset_index(drop=True)
-    df_b = df_b.sort_values('year').reset_index(drop=True)
-    la = df_a.iloc[-1]
-    lb = df_b.iloc[-1]
-    score_a = score_company(df_a)
-    score_b = score_company(df_b)
-    recommended = name_a if score_a['score'] >= score_b['score'] else name_b
-    profile_text = PROFILE_RULES.get(profile, PROFILE_RULES['平衡型'])
-    reasoning = (
-        f'按{profile}投资者视角，{profile_text}'
-        f'系统从盈利能力、现金流质量、偿债稳健性与成长能力四个维度进行评分。'
-        f'{name_a} 综合评分为 {score_a["score"]} 分，{name_b} 综合评分为 {score_b["score"]} 分，'
-        f'当前研究辅助倾向为：{recommended}。该结论仅供研究参考，不构成投资建议。'
-    )
-    table = pd.DataFrame([
-        {'指标': '营业收入(亿元)', name_a: la.get('revenue'), name_b: lb.get('revenue')},
-        {'指标': '归母净利润(亿元)', name_a: la.get('net_profit'), name_b: lb.get('net_profit')},
-        {'指标': '经营现金流(亿元)', name_a: la.get('operating_cashflow'), name_b: lb.get('operating_cashflow')},
-        {'指标': 'ROE(%)', name_a: la.get('roe'), name_b: lb.get('roe')},
-        {'指标': '资产负债率(%)', name_a: la.get('debt_ratio'), name_b: lb.get('debt_ratio')},
-    ])
+def compare_companies(name_a: str, df_a: pd.DataFrame, name_b: str, df_b: pd.DataFrame,
+                      profile: str = '平衡型', metrics: list[str] | None = None) -> dict[str, Any]:
+    df_a, df_b = clean_financial_df(df_a), clean_financial_df(df_b)
+    years_a = set(df_a['year']) if 'year' in df_a else set()
+    years_b = set(df_b['year']) if 'year' in df_b else set()
+    common_years = sorted(years_a & years_b)
+    # Never compare the latest rows from different report years implicitly.
+    a = df_a[df_a['year'].isin(common_years)] if 'year' in df_a else df_a
+    b = df_b[df_b['year'].isin(common_years)] if 'year' in df_b else df_b
+    keys = metrics or ['revenue', 'net_profit', 'operating_cashflow', 'roe', 'debt_ratio']
+    table_rows = []
+    display_years = sorted(years_a | years_b) if metrics else common_years[-1:]
+    for year in display_years:
+        la = df_a[df_a['year'] == year].iloc[-1] if year in years_a else pd.Series(dtype=object)
+        lb = df_b[df_b['year'] == year].iloc[-1] if year in years_b else pd.Series(dtype=object)
+        for key in keys:
+            table_rows.append({'年度': int(year), '指标': f'{METRIC_LABELS.get(key, key)}({METRIC_UNITS.get(key, "")})',
+                               name_a: safe_num(la.get(key)), name_b: safe_num(lb.get(key))})
+    table = pd.DataFrame(table_rows)
+    unavailable = dict(score=None, detail={}, basis=[], source='', available=False,
+                       missing=[], reason='仅比较选定指标，不执行综合评分')
+    score_a = dict(unavailable) if metrics else score_company(a)
+    score_b = dict(unavailable) if metrics else score_company(b)
+    recommended = None
+    if metrics:
+        reasoning = '按相同年度逐项比较已选指标；缺失值保留为空，不据单项数据给出综合评分或投资倾向。'
+    elif not common_years:
+        reasoning = f'{name_a}与{name_b}没有共同可用年度，不能跨报告期形成综合比较或倾向。'
+    elif not score_a['available'] or not score_b['available']:
+        reasons = '；'.join(f'{name}：{score["reason"]}' for name, score in [(name_a, score_a), (name_b, score_b)] if not score['available'])
+        reasoning = '综合评分所需数据不足，不给出综合倾向。' + reasons
+    else:
+        if score_a['score'] != score_b['score']:
+            recommended = name_a if score_a['score'] > score_b['score'] else name_b
+        reasoning = (f'比较年度为{int(common_years[-1])}年。{name_a}综合评分{score_a["score"]}分，'
+                     f'{name_b}综合评分{score_b["score"]}分。'
+                     + (f'规则评分较高的是{recommended}。' if recommended else '两家公司规则评分相同。')
+                     + '评分仅描述所用指标，不构成投资建议。')
     dimension_rows = []
-    for dim in ['盈利能力', '现金流质量', '偿债稳健性', '成长能力']:
-        dimension_rows.append({'评分维度': dim, name_a: score_a['detail'].get(dim, 0), name_b: score_b['detail'].get(dim, 0)})
-    dimension_rows.append({'评分维度': '综合得分', name_a: score_a['score'], name_b: score_b['score']})
-    score_table = pd.DataFrame(dimension_rows)
-    basis = {
-        name_a: score_a.get('basis', []),
-        name_b: score_b.get('basis', []),
-    }
-    return {
-        'recommended': recommended,
-        'reasoning': reasoning,
-        'table': table,
-        'score_table': score_table,
-        'score_a': score_a,
-        'score_b': score_b,
-        'basis': basis,
-    }
+    if not metrics:
+        for dim in ['盈利能力', '现金流质量', '偿债稳健性', '成长能力']:
+            dimension_rows.append({'评分维度': dim, name_a: score_a['detail'].get(dim), name_b: score_b['detail'].get(dim)})
+        dimension_rows.append({'评分维度': '综合得分', name_a: score_a['score'], name_b: score_b['score']})
+    return {'recommended': recommended, 'reasoning': reasoning, 'table': table,
+            'score_table': pd.DataFrame(dimension_rows), 'score_a': score_a, 'score_b': score_b,
+            'basis': {name_a: score_a.get('basis', []), name_b: score_b.get('basis', [])}}
 
 
 def metric_query(company_name: str, df: pd.DataFrame, metric_key: str, year: int | None = None) -> str:
@@ -396,21 +486,38 @@ def metric_query(company_name: str, df: pd.DataFrame, metric_key: str, year: int
         year = int(row['year'])
     if metric_key not in row or pd.isna(row.get(metric_key)):
         return f'系统当前没有检索到{company_name}{year}年的{METRIC_LABELS.get(metric_key, metric_key)}数据。'
-    source = get_source_for_metric(work, int(year))
+    source = get_source_for_metric(work, int(year), metric_key)
     return f'{company_name}{int(year)}年{METRIC_LABELS.get(metric_key, metric_key)}为 {fmt_value(metric_key, row.get(metric_key))}。数据来源：{source}。'
 
 
 def trend_text(company_name: str, df: pd.DataFrame, metric_key: str = 'revenue') -> str:
-    if df.empty:
+    work = clean_financial_df(df)
+    if work.empty or metric_key not in work.columns:
         return f'{company_name} 暂无可用趋势数据。'
-    work = df.sort_values('year')
-    points = []
-    for _, row in work.iterrows():
-        if metric_key in row and pd.notna(row.get(metric_key)):
-            points.append(f'{int(row["year"])}年{fmt_value(metric_key, row.get(metric_key))}')
-    growth = calc_growth(work, metric_key)
-    growth_part = f'最近一年同比变化约 {growth:.2f}%。' if growth is not None else '当前数据不足以计算最近一年同比变化。'
-    return f'{company_name}{METRIC_LABELS.get(metric_key, metric_key)}趋势：' + '，'.join(points) + f'。{growth_part}'
+    points = [f'{int(row["year"])}年{fmt_value(metric_key, row.get(metric_key))}' for _, row in work.iterrows()]
+    info = growth_details(work, metric_key)
+    statements = []
+    if METRIC_UNITS.get(metric_key) == '%':
+        if len(work) >= 2:
+            first, last = safe_num(work.iloc[0].get(metric_key)), safe_num(work.iloc[-1].get(metric_key))
+            if first is not None and last is not None:
+                statements.append(f'{info["start_year"]}—{info["end_year"]}年变化 {last-first:.2f} 个百分点')
+        if not statements:
+            statements.append('数据不足，暂不计算百分点变化')
+    else:
+        if info['yoy'] is not None:
+            statements.append(f'{info["end_year"]}年同比变化 {info["yoy"]:.2f}%')
+        else:
+            statements.append('缺少相邻年度有效值或同比基期非正，暂不计算最近一年同比')
+        if info['interval_growth'] is not None and info['end_year'] - info['start_year'] > 1:
+            statements.append(f'{info["start_year"]}—{info["end_year"]}年区间累计增长 {info["interval_growth"]:.2f}%')
+            if info['cagr'] is not None:
+                statements.append(f'该{info["end_year"]-info["start_year"]}年区间年化增长率（CAGR）{info["cagr"]:.2f}%')
+        if info['reason']:
+            statements.append(info['reason'])
+    if info['missing_years']:
+        statements.append('缺少' + '、'.join(str(y) for y in info['missing_years']) + '年指标，不能据此描述完整逐年趋势')
+    return f'{company_name}{METRIC_LABELS.get(metric_key, metric_key)}趋势：' + '，'.join(points) + '。' + '；'.join(statements) + '。'
 
 
 def explain_metric(metric_key: str) -> str:
@@ -426,20 +533,11 @@ def explain_metric(metric_key: str) -> str:
 
 
 def _yoy_text(df: pd.DataFrame, key: str) -> str:
-    if df.empty or key not in df.columns or len(df) < 2:
-        return '数据不足，暂不计算同比变化。'
-    work = df.sort_values('year').dropna(subset=[key])
-    if len(work) < 2:
-        return '数据不足，暂不计算同比变化。'
-    latest = work.iloc[-1]
-    prev = work.iloc[-2]
-    a = safe_num(latest.get(key))
-    b = safe_num(prev.get(key))
-    if a is None or b in (None, 0):
-        return '数据不足，暂不计算同比变化。'
-    yoy = (a - b) / abs(b) * 100
-    direction = '增长' if yoy >= 0 else '下降'
-    return f'{int(latest["year"])}年较{int(prev["year"])}年{direction}{abs(yoy):.2f}%。'
+    growth = calc_growth(df, key)
+    if growth is None:
+        return '相邻年度数据不足或基期非正，暂不计算同比。'
+    work = clean_financial_df(df)
+    return f'{int(work.iloc[-1]["year"])}年同比变化 {growth:.2f}%。'
 
 
 def _data_range_text(df: pd.DataFrame) -> str:
@@ -450,7 +548,7 @@ def _data_range_text(df: pd.DataFrame) -> str:
 
 
 def generate_report(company_name: str, df: pd.DataFrame, alerts: list[dict[str, str]], compare_payload: dict[str, Any] | None, profile: str = '平衡型') -> str:
-    """Generate a richer competition-facing investor report.
+    """Generate a financial research report from the supplied analysis inputs.
 
     The text version is intentionally more complete than the dashboard summary:
     it includes data range, multi-year metric table, trend interpretation,
@@ -460,16 +558,19 @@ def generate_report(company_name: str, df: pd.DataFrame, alerts: list[dict[str, 
     summary = build_summary(company_name, df, alerts, profile)
     score = score_company(df)
     risk = risk_dashboard(alerts)
-    source = get_source_for_metric(df) if not df.empty else '暂无来源记录'
+    source = public_message(get_source_for_metric(df), fallback=NO_SOURCE) if not df.empty else NO_SOURCE
     years_text = _data_range_text(df)
+    score_text = f'{score["score"]}分' if score['available'] else '数据不足，暂不评分'
 
     lines = [
-        f'{company_name}投资者分析报告',
+        PAGE_TITLE,
+        REPORT_SUBTITLE,
+        f'分析企业：{company_name}',
         '',
         '一、报告摘要',
         summary,
-        f'本次分析覆盖年度：{years_text}。系统从盈利能力、现金流质量、偿债稳健性和成长能力四个维度形成综合判断。',
-        f'综合评分：{score["score"]}分；综合风险状态：{risk.get("综合风险", "-")}。',
+        f'本次分析覆盖年度：{years_text}。仅在指标完整且年度可比时进行四维评分；缺失指标不推定为正常。',
+        f'综合评分：{score_text}；综合风险状态：{risk.get("综合风险", "-")}。',
         '',
         '二、核心财务数据概览',
     ]
@@ -488,14 +589,14 @@ def generate_report(company_name: str, df: pd.DataFrame, alerts: list[dict[str, 
         lines += [
             '',
             '三、趋势解读',
-            f'- 营业收入趋势：{trend_text(company_name, work, "revenue")} {_yoy_text(work, "revenue")}',
-            f'- 归母净利润趋势：{trend_text(company_name, work, "net_profit")} {_yoy_text(work, "net_profit")}',
-            f'- 经营现金流趋势：{trend_text(company_name, work, "operating_cashflow")} {_yoy_text(work, "operating_cashflow")}',
+            f'- 营业收入趋势：{trend_text(company_name, work, "revenue")}',
+            f'- 归母净利润趋势：{trend_text(company_name, work, "net_profit")}',
+            f'- 经营现金流趋势：{trend_text(company_name, work, "operating_cashflow")}',
             f'- 股东回报观察：最新年度ROE为{fmt_value("roe", latest.get("roe"))}，用于观察权益资本回报效率。',
             f'- 财务稳健观察：最新年度资产负债率为{fmt_value("debt_ratio", latest.get("debt_ratio"))}，用于衡量财务杠杆水平。',
         ]
     else:
-        lines.append('当前企业暂无可用于建模的结构化年度指标；可继续导入Excel/CSV或公开披露PDF。')
+        lines.append(NO_METRICS)
 
     lines += ['', '四、风险预警与规则依据']
     for alert in alerts:
@@ -504,7 +605,7 @@ def generate_report(company_name: str, df: pd.DataFrame, alerts: list[dict[str, 
         lines.append(f'  数据依据：{alert.get("basis", "-")}')
 
     lines += ['', '五、四维评分解释']
-    lines.append(f'综合评分：{score["score"]}分。评分用于辅助横向比较，不构成投资建议。')
+    lines.append(f'综合评分：{score_text}。' + ('评分用于辅助横向比较，不构成投资建议。' if score['available'] else score['reason']))
     for dim, val in score['detail'].items():
         lines.append(f'- {dim}：{val}分')
     for b in score.get('basis', [])[:6]:
@@ -529,9 +630,19 @@ def generate_report(company_name: str, df: pd.DataFrame, alerts: list[dict[str, 
     lines += [
         '',
         '九、数据来源与可追溯性',
-        f'主要结构化数据来源：{source}。系统保留已导入的结构化财务表、公开披露PDF及在线检索记录，用于回溯分析依据。',
+        f'主要结构化数据来源：{source.rstrip("。")}。来源信息按本次已接入记录列示；缺失指标来源须补充核验。',
         '',
         '十、研究结论',
-        '本报告基于系统已接入的结构化财务数据、公开来源材料和规则引擎自动生成，适用于投资研究辅助、企业横向比较和答辩展示。报告仅供学习研究与辅助分析，不构成任何形式的投资建议或买卖指令。',
+        '本报告基于系统已接入的结构化财务数据、公开来源材料和规则引擎自动生成，适用于财务信息理解、企业经营分析与指标对比。报告仅供学习研究与辅助分析，不构成任何形式的投资建议或买卖指令。',
     ]
+    if not df.empty:
+        position = lines.index('十、研究结论') - 1
+        provenance_lines = []
+        for _, row in df.sort_values('year').iterrows():
+            year = int(row['year'])
+            for key in METRIC_LABELS:
+                if safe_num(row.get(key)) is not None:
+                    source_label = public_message(get_source_for_metric(df, year, key), fallback=NO_SOURCE)
+                    provenance_lines.append(f'- {year}年{METRIC_LABELS[key]} {fmt_value(key, row.get(key))}：{source_label}。')
+        lines[position:position] = provenance_lines
     return '\n'.join(lines)

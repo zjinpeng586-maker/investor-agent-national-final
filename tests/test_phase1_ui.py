@@ -76,8 +76,8 @@ def test_qa_period_answer_data_compare_and_header_stay_in_sync():
     item = _submit_question(app, '比亚迪营业收入是多少？')
     assert item['result']['parsed']['years'] == [2024]
     assert '2024年营业收入' in item['result']['answer']
-    result_tables = [table.value for table in app.dataframe if 'year' in table.value.columns]
-    assert result_tables and result_tables[0]['year'].astype(int).tolist() == [2024]
+    result_tables = [table.value for table in app.dataframe if '年度' in table.value.columns and '企业' in table.value.columns]
+    assert result_tables and result_tables[0]['年度'].astype(int).tolist() == [2024]
 
     app = AppTest.from_file(APP_PATH, default_timeout=20).run()
     _widget_by_label(app.selectbox, '当前理解期间').set_value('2025').run()
@@ -85,8 +85,11 @@ def test_qa_period_answer_data_compare_and_header_stay_in_sync():
     assert item['result']['parsed']['years'] == [2024]
 
     app = AppTest.from_file(APP_PATH, default_timeout=20).run()
-    compare_button = next(button for button in app.button if '核心指标对比' in button.label)
+    compare_button = app.button(key='recommended_2')
     compare_button.click().run()
+    assert set(app.session_state.chat_messages[-1]['result']['parsed']['companies']) == {
+        '比亚迪股份有限公司', '宁德时代新能源科技股份有限公司'
+    }
     compare_tables = [table.value for table in app.dataframe if '企业' in table.value.columns]
     assert compare_tables
     assert set(compare_tables[0]['企业']) == {'比亚迪股份有限公司', '宁德时代新能源科技股份有限公司'}
@@ -98,10 +101,10 @@ def test_qa_period_answer_data_compare_and_header_stay_in_sync():
     header_html = '\n'.join(item.value for item in app.markdown if 'context-bar' in item.value)
     assert '当前企业：宁德时代新能源科技股份有限公司' in header_html
     assert app.session_state.selected_cmp != app.session_state.selected_main
-    compare_button = next(button for button in app.button if '核心指标对比' in button.label)
-    assert '宁德时代新能源科技股份有限公司' in compare_button.label
-    assert app.session_state.selected_cmp in compare_button.label
+    compare_button = app.button(key='recommended_2')
+    expected_companies = {app.session_state.selected_main, app.session_state.selected_cmp}
     compare_button.click().run()
+    assert set(app.session_state.chat_messages[-1]['result']['parsed']['companies']) == expected_companies
     compare_tables = [table.value for table in app.dataframe if '企业' in table.value.columns]
     assert compare_tables
     assert len(set(compare_tables[0]['企业'])) == 2

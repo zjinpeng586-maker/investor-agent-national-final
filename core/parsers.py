@@ -2,32 +2,34 @@ from __future__ import annotations
 
 import io
 import re
+import zipfile
+from xml.etree.ElementTree import iterparse
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from pypdf import PdfReader
+from core.import_validation import (METRICS, NUMERIC_METRICS, MONEY_METRICS, PERCENT_METRICS,
+                                    blank, strict_number, detect_money_unit, detect_percent_unit, normalize_metric)
 
 try:
     from pdfminer.high_level import extract_text as pdfminer_extract_text
-except Exception:  # pragma: no cover - optional dependency alternate_path
+except ImportError:
     pdfminer_extract_text = None
-
 try:
-    import fitz  # PyMuPDF, more tolerant for some exchange annual reports
-except Exception:  # pragma: no cover - optional dependency alternate_path
+    import fitz
+except ImportError:
     fitz = None
-
 try:
-    import pdfplumber  # table-aware extraction for annual-report financial tables
-except Exception:  # pragma: no cover - optional dependency alternate_path
+    import pdfplumber
+except ImportError:
     pdfplumber = None
 
 CH_ALIASES = {
     'year': ['年份', '年度', '报告年度', 'year', 'report_year'],
     'company': ['企业名称', '公司名称', '公司', '企业', 'company', '证券简称'],
-    'revenue': ['营业收入', '营业总收入', '营收', '收入合计', 'revenue', '营业收入(亿)', '营业收入(亿元)', '营业收入（亿元）'],
-    'net_profit': ['归母净利润', '归属于上市公司股东的净利润', '归属于母公司股东的净利润', '净利润', 'net_profit', '归母净利润(亿)', '归母净利润(亿元)'],
+    'revenue': ['营业收入', '营业总收入', '营收', '收入合计', 'revenue'],
+    'net_profit': ['归母净利润', '归属于上市公司股东的净利润', '归属于母公司股东的净利润', '净利润', 'net_profit'],
     'operating_cashflow': ['经营现金流', '经营活动产生的现金流量净额', '经营活动现金流量净额', '经营现金流净额', 'operating_cashflow', '经营活动现金流'],
     'roe': ['ROE', '净资产收益率', '加权平均净资产收益率', 'roe'],
     'debt_ratio': ['资产负债率', 'debt_ratio'],
@@ -35,108 +37,216 @@ CH_ALIASES = {
     'eps': ['每股收益', '基本每股收益', 'eps'],
     'audit_opinion': ['审计意见', '审计意见类型', 'audit_opinion'],
 }
+COMPANY_PATTERNS = [r'([\u4e00-\u9fa5A-Za-z0-9（）()·]{2,40}股份有限公司)',
+                    r'([\u4e00-\u9fa5A-Za-z0-9（）()·]{2,40}有限公司)']
+NUMBER_RE = re.compile(r'(?<![\w.])(?:[-+−]?(?:\d[\d,，]*(?:\.\d+)?|\.\d+)|[（(]\d[\d,，]*(?:\.\d+)?[）)])\s*(?:亿元|百万元|万元|千元|元/股|元|[%％])?')
 
 
-def _norm_col(s: str) -> str:
-    return str(s).strip().replace('（', '(').replace('）', ')').replace('％', '%').replace('\n', '')
+def _norm_col(value: str) -> str:
+    return str(value).strip().replace('（', '(').replace('）', ')').replace('％', '%').replace('\n', '').replace(' ', '')
+
+
+def _base_col(value: str) -> str:
+    value = _norm_col(value)
+    return re.sub(r'\([^)]*\)|\[[^]]*\]', '', value).strip(':：').lower()
 
 
 def _find_col(cols: list[str], aliases: list[str]) -> str | None:
-    normed = {_norm_col(c): c for c in cols}
+    # Exact normalized label only: 营业收入增长率 is not 营业收入.
     for alias in aliases:
-        alias_n = _norm_col(alias).lower()
-        for c_norm, original in normed.items():
-            low = c_norm.lower()
-            if alias_n == low or alias_n in low or low in alias_n:
-                return original
+        for col in cols:
+            if _base_col(col) == _base_col(alias):
+                return col
     return None
 
 
-def _to_float(v: Any) -> float | None:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return None
-    s = str(v).strip().replace(',', '').replace('，', '').replace('%', '').replace('％', '')
-    s = s.replace('约', '').replace('人民币', '').replace('元', '')
-    if not s or s.lower() == 'nan' or s in ['-', '—', '--']:
-        return None
+def _to_float(value: Any) -> float | None:
     try:
-        return float(s)
-    except Exception:
-        m = re.search(r'-?\d+(?:\.\d+)?', s)
-        if m:
-            try:
-                return float(m.group(0))
-            except Exception:
-                return None
-    return None
+        return strict_number(value)
+    except ValueError:
+        return None
+
+
+def _year(value: Any) -> int | None:
+    text = str(value).strip()
+    match = re.fullmatch(r'(19\d{2}|20\d{2}|2100)(?:\.0|年度|年)?', text)
+    return int(match.group(1)) if match else None
+
+
+def _excel_col(index: int) -> str:
+    result = ''
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+def _frames(file_name: str, content: bytes) -> list[tuple[str, pd.DataFrame, int, dict]]:
+    if len(content) > 30 * 1024 * 1024:
+        raise ValueError('表格超过 30 MB 解析限制，请拆分后导入。')
+    if file_name.lower().endswith('.csv'):
+        try:
+            frame = pd.read_csv(io.BytesIO(content), dtype=object, nrows=20001)
+        except UnicodeDecodeError:
+            frame = pd.read_csv(io.BytesIO(content), encoding='gbk', dtype=object, nrows=20001)
+        if len(frame) > 20000 or len(frame.columns) > 100:
+            raise ValueError('表格超过 20,000 行或 100 列，请拆分后导入。')
+        return [('CSV', frame, 1, {})]
+    if file_name.lower().endswith('.xlsx'):
+        _validate_xlsx_archive(content)
+    result = []
+    book = pd.ExcelFile(io.BytesIO(content))
+    if len(book.sheet_names) > 30:
+        book.close()
+        raise ValueError('工作表超过 30 张，请拆分后导入。')
+    format_book = None
+    format_xls = None
+    if file_name.lower().endswith('.xlsx'):
+        from openpyxl import load_workbook
+        format_book = load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+    elif file_name.lower().endswith('.xls'):
+        import xlrd
+        format_xls = xlrd.open_workbook(file_contents=content, formatting_info=True, on_demand=True)
+    for sheet in book.sheet_names:
+        raw = pd.read_excel(book, sheet_name=sheet, header=None, dtype=object, nrows=20002)
+        if len(raw) > 20001 or len(raw.columns) > 100:
+            book.close()
+            if format_book is not None:
+                format_book.close()
+            raise ValueError('工作表超过 20,000 行或 100 列，请拆分后导入。')
+        for header in range(min(12, len(raw))):
+            cols = [str(value) for value in raw.iloc[header].tolist()]
+            if _find_col(cols, CH_ALIASES['year']):
+                frame = raw.iloc[header + 1:].copy()
+                frame.columns = cols
+                formats = {}
+                if format_book is not None:
+                    ws = format_book[sheet]
+                    for row in ws.iter_rows(min_row=header + 2):
+                        for cell in row:
+                            formats[(cell.row, cell.column)] = cell.number_format
+                elif format_xls is not None:
+                    ws = format_xls.sheet_by_name(sheet)
+                    for row_index in range(header + 1, min(ws.nrows, 20001)):
+                        for column_index in range(min(ws.ncols, 100)):
+                            xf = format_xls.xf_list[ws.cell_xf_index(row_index, column_index)]
+                            formats[(row_index + 1, column_index + 1)] = format_xls.format_map[xf.format_key].format_str
+                result.append((sheet, frame, header + 1, formats))
+                break
+    if format_book is not None:
+        format_book.close()
+    if format_xls is not None:
+        format_xls.release_resources()
+    book.close()
+    if not result:
+        raise ValueError('未识别到年份列；工作表须包含“年份”或“year”。')
+    return result
+
+
+def _validate_xlsx_archive(content: bytes) -> None:
+    """Reject oversized expansion/cell counts before pandas builds a workbook."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            members = archive.infolist()
+            if len(members) > 2000 or sum(member.file_size for member in members) > 100 * 1024 * 1024:
+                raise ValueError('Excel 解压后超过 100 MB 或包含过多成员，请拆分文件。')
+            if any(member.file_size > 30 * 1024 * 1024 or (member.file_size > 1024 * 1024 and member.file_size / max(1, member.compress_size) > 200)
+                   for member in members):
+                raise ValueError('Excel 压缩展开比例或单项大小异常，已阻止解析。')
+            cell_count = 0
+            for member in members:
+                if member.filename.startswith('xl/worksheets/') and member.filename.endswith('.xml'):
+                    with archive.open(member) as source:
+                        for _, element in iterparse(source, events=('end',)):
+                            tag = element.tag.rsplit('}', 1)[-1]
+                            if tag == 'c':
+                                cell_count += 1
+                                if cell_count > 200000:
+                                    raise ValueError('Excel 超过 200,000 个单元格，请拆分文件。')
+                            if tag == 'row' and int(element.attrib.get('r', 0)) > 20001:
+                                raise ValueError('Excel 超过 20,000 数据行，请拆分文件。')
+                            element.clear()
+    except zipfile.BadZipFile as error:
+        raise ValueError('XLSX 文件结构无效，请重新保存为标准 Excel 文件。') from error
 
 
 def _read_tabular(file_name: str, content: bytes) -> pd.DataFrame:
-    if file_name.lower().endswith('.csv'):
-        try:
-            return pd.read_csv(io.BytesIO(content))
-        except UnicodeDecodeError:
-            return pd.read_csv(io.BytesIO(content), encoding='gbk')
-    # read first sheet; if first rows are notes, try scanning header rows
-    raw = pd.read_excel(io.BytesIO(content), header=None)
-    for header_idx in range(min(8, len(raw))):
-        candidate = pd.read_excel(io.BytesIO(content), header=header_idx)
-        cols = [_norm_col(c) for c in candidate.columns]
-        if _find_col(cols, CH_ALIASES['year']) and (_find_col(cols, CH_ALIASES['revenue']) or _find_col(cols, CH_ALIASES['net_profit'])):
-            return candidate
-    return pd.read_excel(io.BytesIO(content))
+    return _frames(file_name, content)[0][1]
 
 
-def parse_tabular(file_name: str, content: bytes) -> tuple[str | None, list[dict[str, Any]], list[str]]:
+def parse_tabular(file_name: str, content: bytes, *, money_unit: str | None = None,
+                  percent_unit: str | None = None) -> tuple[str | None, list[dict[str, Any]], list[str]]:
     warnings: list[str] = []
-    df = _read_tabular(file_name, content)
-    df.columns = [_norm_col(c) for c in df.columns]
-    company_col = _find_col(list(df.columns), CH_ALIASES['company'])
-    year_col = _find_col(list(df.columns), CH_ALIASES['year'])
-    if not year_col:
-        raise ValueError('未识别到年份列，请在表中包含“年份”或“year”列。')
-
-    company_name = None
-    if company_col and df[company_col].notna().any():
-        company_name = str(df[company_col].dropna().iloc[0]).strip()
-
-    mapped: dict[str, str] = {}
-    for key, aliases in CH_ALIASES.items():
-        col = _find_col(list(df.columns), aliases)
-        if col:
-            mapped[key] = col
-
-    records: list[dict[str, Any]] = []
-    for _, row in df.iterrows():
-        year = _to_float(row.get(mapped.get('year', '')))
-        if year is None:
-            continue
-        record = {'year': int(year), 'raw_source': file_name}
-        for key in ['revenue', 'net_profit', 'operating_cashflow', 'roe', 'debt_ratio', 'gross_margin', 'eps']:
-            col = mapped.get(key)
-            if col:
-                record[key] = _to_float(row.get(col))
-        if mapped.get('audit_opinion'):
-            val = row.get(mapped['audit_opinion'])
-            record['audit_opinion'] = None if pd.isna(val) else str(val).strip()
-        records.append(record)
-
-    needed = ['revenue', 'net_profit', 'operating_cashflow', 'roe', 'debt_ratio']
-    missing = [k for k in needed if k not in mapped]
-    if missing:
-        warnings.append('以下字段未识别，将以空值导入：' + '、'.join(missing))
-    if not company_name:
-        warnings.append('未在表格中识别到企业名称，将使用文件名或手动名称。')
+    records: list[dict] = []
+    companies: set[str] = set()
+    for sheet, frame, header_row, formats in _frames(file_name, content):
+        frame.columns = [_norm_col(col) for col in frame.columns]
+        cols = list(frame.columns)
+        mapped = {key: _find_col(cols, aliases) for key, aliases in CH_ALIASES.items()}
+        money_unit_col = _find_col(cols, ['金额单位', '单位', 'money_unit'])
+        percent_unit_col = _find_col(cols, ['比率口径', '百分比口径', 'percent_unit'])
+        period_col = _find_col(cols, ['报告期', '期间', 'period'])
+        if not mapped['year']:
+            raise ValueError('未识别到年份列，请包含“年份”或“year”。')
+        duplicate_cols = [col for col in set(cols) if cols.count(col) > 1]
+        if duplicate_cols:
+            raise ValueError('存在重复列名，无法确定数据归属：' + '、'.join(duplicate_cols))
+        for offset, (_, row) in enumerate(frame.iterrows(), header_row + 1):
+            if all(blank(value) for value in row):
+                continue
+            record: dict[str, Any] = {'year': _year(row[mapped['year']]), 'raw_source': file_name,
+                                      '_provenance': {}, '_errors': []}
+            period_value = row.get(period_col) if period_col else None
+            if not blank(period_value) and str(period_value).strip() not in ('全年', '年度', 'annual', str(record['year']), f'{record["year"]}年'):
+                record['_errors'].append(f'{sheet}!{offset} 行不是明确的完整年度记录，不能把其他期间归入全年。')
+            if record['year'] is None:
+                record['_errors'].append(f'{sheet}!{offset} 行年份无效或不是完整年度，不能把半年/季度记录作为全年导入。')
+            company_value = row.get(mapped['company']) if mapped['company'] else None
+            company = None if blank(company_value) else str(company_value).strip()
+            record['company_name'] = company
+            if company:
+                companies.add(company)
+            for key in METRICS:
+                col = mapped.get(key)
+                if not col:
+                    continue
+                raw_value = row[col]
+                if blank(raw_value):
+                    continue
+                cell = f'{sheet}!{_excel_col(cols.index(col) + 1)}{offset}'
+                source_unit = detect_money_unit(col) if key in MONEY_METRICS else detect_percent_unit(col)
+                if source_unit is None and key in MONEY_METRICS and money_unit_col:
+                    source_unit = detect_money_unit(str(row[money_unit_col]))
+                if source_unit is None and key in PERCENT_METRICS and percent_unit_col:
+                    source_unit = detect_percent_unit(str(row[percent_unit_col]))
+                excel_format = formats.get((offset, cols.index(col) + 1), '')
+                numeric_format = re.sub(r'"[^"]*"|\\.', '', excel_format)
+                if key in PERCENT_METRICS and '%' in numeric_format:
+                    # Excel stores a displayed 12.5% as the numeric fraction .125.
+                    source_unit = '比例'
+                if key == 'eps':
+                    source_unit = '元/股'
+                if key == 'audit_opinion':
+                    value, source_unit, normalized_unit = _audit_opinion(str(raw_value)), '文本', '文本'
+                else:
+                    try:
+                        value, source_unit, normalized_unit = normalize_metric(key, raw_value, source_unit, money_unit, percent_unit)
+                    except ValueError as error:
+                        record['_errors'].append(f'{cell} {col}：{error}')
+                        continue
+                record[key] = value
+                record['_provenance'][key] = {'file_name': file_name, 'page': None, 'cell': cell,
+                    'raw_value': str(raw_value), 'raw_unit': source_unit, 'normalized_unit': normalized_unit}
+            records.append(record)
+    if not companies:
+        warnings.append('表格缺少企业名称，请在预览前填写；不会按文件名或首家公司猜测。')
+    if len(companies) > 1:
+        warnings.append(f'已识别 {len(companies)} 家企业，按各行企业名称分别导入。')
     if not records:
         raise ValueError('未读取到有效年度数据，请检查表格是否为标准行列表。')
-    return company_name, records, warnings
-
-
-COMPANY_PATTERNS = [
-    r'([\u4e00-\u9fa5A-Za-z0-9（）()·]{2,40}股份有限公司)',
-    r'([\u4e00-\u9fa5A-Za-z0-9（）()·]{2,40}有限公司)',
-]
-YEAR_PATTERN = re.compile(r'(20\d{2})\s*年')
+    for record in records:
+        warnings.extend(record['_errors'])
+    return next(iter(companies)) if len(companies) == 1 else None, records, list(dict.fromkeys(warnings))
 
 
 def extract_pdf_text(content: bytes, page_limit: int = 120) -> str:
@@ -233,259 +343,315 @@ def extract_pdf_text(content: bytes, page_limit: int = 120) -> str:
 
 
 def _extract_company(text: str, file_name: str = '') -> str | None:
-    # Prefer title area
-    head = text[:3000]
-    for pat in COMPANY_PATTERNS:
-        m = re.search(pat, head)
-        if m:
-            name = m.group(1)
-            for bad in ['本公司', '公司法', '股份有限公司法']:
-                if bad in name:
-                    continue
-            return name
-    stem = Path(file_name).stem
-    for pat in COMPANY_PATTERNS:
-        m = re.search(pat, stem)
-        if m:
-            return m.group(1)
+    for source in [text[:3000], Path(file_name).stem]:
+        for pattern in COMPANY_PATTERNS:
+            match = re.search(pattern, source)
+            if match and not any(bad in match.group(1) for bad in ('公司法', '本公司')):
+                return match.group(1)
     return None
 
 
 def _extract_year(text: str, file_name: str = '') -> int | None:
-    # prefer annual report patterns
-    for src in [file_name, text[:3000]]:
-        m = re.search(r'(20\d{2})\s*年\s*(?:年度报告|年度财务报告|年报)', src)
-        if m:
-            return int(m.group(1))
-    years = YEAR_PATTERN.findall(text[:5000]) or re.findall(r'20\d{2}', file_name)
-    if years:
-        return int(years[0])
-    return None
+    for source in [text[:3000], Path(file_name).stem]:
+        match = re.search(r'(20\d{2})\s*年?\s*(?:年度报告|年度财务报告|年报)', source)
+        if match:
+            return int(match.group(1))
+    # A single visible year is a permissible unambiguous report-period hint.
+    years = set(re.findall(r'(20\d{2})\s*年', text[:1500]))
+    return int(next(iter(years))) if len(years) == 1 else None
 
 
-def _unit_factor(window: str) -> float:
-    if '亿元' in window:
-        return 1.0
-    if '百万元' in window or '百万' in window:
-        return 0.01
-    if '万元' in window:
-        return 1e-4
-    if '千元' in window:
-        return 1e-5
-    if '元' in window:
-        return 1e-8
-    return 1.0
+def _document_report_year(text: str) -> int | None:
+    """A document's report year comes from its title/header, never comparison columns."""
+    match = re.search(r'(20\d{2})\s*年?\s*(?:年度报告|年度财务报告|年报)', text[:3000])
+    return int(match.group(1)) if match else None
 
 
-def _numbers_after_label(text: str, label: str, width: int = 520) -> list[float]:
-    idx = text.find(label)
-    if idx == -1:
-        return []
-    window = text[idx: idx + width].replace(' ', '')
-    nums = []
-    for m in re.finditer(r'[-+]?\d[\d,]*(?:\.\d+)?%?', window):
-        raw = m.group(0)
-        if '%' in raw:
-            try:
-                nums.append(float(raw.replace('%', '').replace(',', '')))
-            except Exception:
-                pass
-        else:
-            try:
-                nums.append(float(raw.replace(',', '')) * _unit_factor(window))
-            except Exception:
-                pass
-    return nums
+def _issuer_stock_codes(text: str) -> list[str]:
+    # Only explicitly labelled stock/security codes in the title/company-profile area.
+    matches = re.findall(r'(?:股票代码|证券代码)[\s:：]{0,12}((?:\d\s*){6})(?!\d)', text[:15000])
+    return sorted({re.sub(r'\s+', '', code) for code in matches})
 
 
-
-
-def _iter_contexts(text: str, labels: list[str], width: int = 900) -> list[tuple[str, str, int]]:
-    """Return candidate contexts around all label occurrences.
-
-    Annual-report PDFs often contain the same label many times. The first hit may
-    be a narrative paragraph, business segment table, or quarterly table. We scan
-    every occurrence and later rank candidate contexts instead of only using
-    ``text.find``.
-    """
-    norm = text.replace('\u3000', ' ')
-    contexts: list[tuple[str, str, int]] = []
-    for label in labels:
-        start = 0
-        while True:
-            idx = norm.find(label, start)
-            if idx == -1:
-                break
-            left = max(0, idx - 350)
-            right = min(len(norm), idx + width)
-            contexts.append((label, norm[left:right], idx))
-            start = idx + max(1, len(label))
-    return contexts
-
-
-def _score_metric_context(label: str, ctx: str, metric: str) -> int:
-    score = 0
-    good_words = ['主要会计数据', '主要财务指标', '会计数据和财务指标', '合并利润表', '合并现金流量表', '合并资产负债表']
-    bad_words = ['分季度', '季度', '主营业务分', '按产品', '按行业', '构成', '占营业收入', '变动原因', '募集资金', '非经常性']
-    for w in good_words:
-        if w in ctx:
-            score += 8
-    for w in bad_words:
-        if w in ctx:
-            score -= 8
-    if metric == 'revenue' and '营业收入' == label:
-        score += 3
-    if metric == 'net_profit' and '归属于上市公司股东的净利润' in label:
-        score += 5
-    if metric == 'operating_cashflow' and '经营活动产生的现金流量净额' in label:
-        score += 5
-    if metric == 'roe' and '加权平均' in label:
-        score += 5
-    return score
-
-
-def _extract_numbers_with_units(ctx: str, want_percent: bool = False) -> list[float]:
-    # Normalize common OCR/text-extraction spacing while preserving % symbols.
-    compact = ctx.replace(',', '').replace('，', '').replace('\u3000', ' ')
-    compact = re.sub(r'(?<=\d)\s+(?=\d)', '', compact)
-    if want_percent:
-        vals: list[float] = []
-        for m in re.finditer(r'[-+]?\d+(?:\.\d+)?\s*%?', compact):
-            raw = m.group(0).strip()
-            try:
-                val = float(raw.replace('%', ''))
-            except Exception:
-                continue
-            if -100 <= val <= 100 and not (1900 <= abs(val) <= 2100):
-                vals.append(val)
-        return vals
-    factor = _unit_factor(compact)
-    vals = []
-    for m in re.finditer(r'[-+]?\d+(?:\.\d+)?', compact):
-        raw = m.group(0)
-        try:
-            val = float(raw)
-        except Exception:
-            continue
-        # Skip years, page numbers and percentage fragments.
-        if 1900 <= abs(val) <= 2100:
-            continue
-        around = compact[max(0, m.start()-2): m.end()+2]
-        if '%' in around:
-            continue
-        # A-share annual reports usually present monetary amounts in yuan, but
-        # some extracted text loses the nearby unit. If the number is huge, infer
-        # yuan and convert to 亿元.
-        if factor == 1.0 and abs(val) > 1_000_000:
-            val = val * 1e-8
-        else:
-            val = val * factor
-        if abs(val) >= 0.0001:
-            vals.append(val)
-    return vals
-
-
-def _metric_from_all_contexts(text: str, labels: list[str], metric: str, prefer_percent: bool = False) -> float | None:
-    candidates: list[tuple[int, float]] = []
-    for label, ctx, _idx in _iter_contexts(text, labels):
-        nums = _extract_numbers_with_units(ctx, want_percent=prefer_percent)
-        if not nums:
-            continue
-        score = _score_metric_context(label, ctx, metric)
-        # Prefer first column value in a financial-data table, but ignore values
-        # obviously outside normal financial ratio ranges.
-        for pos, val in enumerate(nums[:4]):
-            if prefer_percent:
-                if not (-100 <= val <= 100):
-                    continue
-            else:
-                # Most target monetary metrics in our competition data are in 亿元.
-                if abs(val) > 1_000_000:  # still not converted correctly
-                    continue
-            candidates.append((score - pos, round(val, 2)))
-    if candidates:
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        return candidates[0][1]
-    return None
-
-
-def _debt_ratio_from_balance_sheet(text: str) -> float | None:
-    assets = _metric_from_all_contexts(text, ['资产总计', '总资产'], 'total_assets')
-    liabilities = _metric_from_all_contexts(text, ['负债合计', '总负债'], 'total_liabilities')
-    if assets and liabilities and assets > 0:
-        ratio = liabilities / assets * 100
-        if 0 <= ratio <= 150:
-            return round(ratio, 2)
-    return None
-
-def _num_from_context(text: str, labels: list[str], prefer_percent: bool = False, metric: str = '') -> float | None:
-    # First use the strengthened all-context extractor. It is much more stable
-    # for exchange-downloaded annual reports than the old first-hit scan.
-    val = _metric_from_all_contexts(text, labels, metric or labels[0], prefer_percent=prefer_percent)
-    if val is not None:
-        return val
-    # AlternatePath to old first-occurrence scan for simple PDFs/templates.
-    for label in labels:
-        idx = text.find(label)
-        if idx == -1:
-            continue
-        window = text[idx: idx + 900].replace(' ', '')
-        if prefer_percent:
-            m = re.search(r'([-+]?\d+(?:\.\d+)?)\s*%', window)
-            if m:
-                return float(m.group(1))
-        nums = _numbers_after_label(text, label)
-        if nums:
-            filtered = [x for x in nums if not (1900 <= abs(x) <= 2100 and len(str(int(abs(x)))) == 4)]
-            if filtered:
-                return round(filtered[0], 2)
-    return None
+def _audit_opinion(text: str) -> str:
+    # Order matters: 无保留意见 contains 保留意见 as a substring.
+    for opinion in ['带强调事项段的无保留意见', '带强调事项的无保留意见', '标准的无保留意见',
+                    '标准无保留意见', '无保留意见', '无法表示意见', '否定意见', '保留意见']:
+        if opinion in text:
+            return opinion
+    return text.strip()
 
 
 def _str_from_context(text: str, labels: list[str]) -> str | None:
-    for label in labels:
-        idx = text.find(label)
-        if idx == -1:
-            continue
-        window = text[idx: idx + 180]
-        for opinion in ['标准的无保留意见', '保留意见', '否定意见', '无法表示意见', '带强调事项段的无保留意见']:
-            if opinion in window:
-                return opinion
-        m = re.search(label + r'[：:\s]*([^\n]{2,50})', window)
-        if m:
-            return m.group(1).strip()
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if any(label in line for label in labels):
+            context = line + '\n' + (lines[index + 1] if index + 1 < len(lines) else '')
+            if '意见' in context:
+                result = _audit_opinion(context)
+                if result != context.strip():
+                    return result
     return None
 
 
-def parse_pdf(file_name: str, content: bytes) -> tuple[str | None, list[dict[str, Any]], list[str], str]:
-    warnings: list[str] = []
-    text = extract_pdf_text(content)
-    company_name = _extract_company(text, file_name)
-    year = _extract_year(text, file_name)
-    record = {
-        'year': year,
-        'revenue': _num_from_context(text, ['营业收入', '营业总收入', '一、营业总收入'], metric='revenue'),
-        'net_profit': _num_from_context(text, ['归属于上市公司股东的净利润', '归属于母公司股东的净利润', '归母净利润'], metric='net_profit'),
-        'operating_cashflow': _num_from_context(text, ['经营活动产生的现金流量净额', '经营活动现金流量净额', '经营现金流'], metric='operating_cashflow'),
-        'roe': _num_from_context(text, ['加权平均净资产收益率', '净资产收益率'], prefer_percent=True, metric='roe'),
-        'debt_ratio': _num_from_context(text, ['资产负债率'], prefer_percent=True, metric='debt_ratio'),
-        'gross_margin': _num_from_context(text, ['毛利率'], prefer_percent=True, metric='gross_margin'),
-        'eps': _num_from_context(text, ['基本每股收益', '每股收益'], metric='eps'),
-        'audit_opinion': _str_from_context(text, ['审计意见类型', '审计意见']),
-        'raw_source': file_name,
-    }
-    if record.get('debt_ratio') is None:
-        record['debt_ratio'] = _debt_ratio_from_balance_sheet(text)
+def _metric_label(value: str) -> tuple[str | None, int]:
+    normalized = _norm_col(value)
+    normalized = re.sub(r'^[一二三四五六七八九十\d]+[、.．]', '', normalized)
+    normalized = normalized.lstrip('其中:：')
+    # Explicitly discard ratios/deltas/segment subrows before any prefix match.
+    if any(word in normalized for word in ['增长', '同比', '占比', '占营业', '扣除非', '扣非']):
+        return None, 0
+    for metric in METRICS:
+        aliases = sorted(CH_ALIASES[metric], key=len, reverse=True)
+        for alias in aliases:
+            if _base_col(normalized) == _base_col(alias):
+                score = 20 if metric == 'net_profit' and ('归属于' in alias or '归母' in alias) else 10
+                return metric, score
+    return None, 0
 
-    if not company_name:
-        warnings.append('PDF 企业名称建议以页面/手动输入信息为准。')
-    if not year:
-        warnings.append('PDF 报告年份建议以页面/手动输入信息为准。')
-    filled = [k for k in ['revenue', 'net_profit', 'operating_cashflow', 'roe', 'debt_ratio'] if record.get(k) is not None]
-    snippet = text[:1600]
-    if not filled:
-        warnings.append('PDF 已完成来源解析与入库；结构化指标将优先采用财务表或校验库。')
-        return company_name, [], warnings, snippet
-    if len(filled) < 3:
-        warnings.append('PDF 已完成来源解析；部分量化字段可由结构化财务表继续增强。')
-    return company_name, [record], warnings, snippet
+
+def _line_label(line: str) -> tuple[str | None, str, str, int]:
+    normalized = _norm_col(line)
+    normalized = re.sub(r'^[一二三四五六七八九十\d]+[、.．]', '', normalized).lstrip('其中:：')
+    for metric in METRICS:
+        for label in sorted(CH_ALIASES[metric], key=len, reverse=True):
+            if normalized.lower().startswith(label.lower()):
+                tail = normalized[len(label):]
+                # Must be a row with numeric cells, never a paragraph containing the label.
+                if metric != 'audit_opinion' and tail and not re.match(r'^[(:：\d+−\-（.%]|^(?:亿元|百万元|万元|千元|元)', tail):
+                    continue
+                # Slice original line by a flexible-space label, preserving numerical cell separation.
+                label_match = re.search(r'\s*'.join(re.escape(ch) for ch in label), line, re.IGNORECASE)
+                if label_match:
+                    metric_score = 20 if metric == 'net_profit' and ('归属于' in label or '归母' in label) else 10
+                    return metric, label, line[label_match.end():].strip(), metric_score
+    return None, '', '', 0
+
+
+def _nearest_unit(context: str) -> str | None:
+    matches = list(re.finditer(r'单位\s*[:：]\s*(?:人民币)?\s*(亿元|百万元|万元|千元|元)(?!/股)', context))
+    return matches[-1].group(1) if matches else None
+
+
+def _section_score(context: str) -> int:
+    # Parent-only statements must never beat consolidated/key annual-data tables.
+    if '母公司' in context[-180:]:
+        return -50
+    if any(word in context[-800:] for word in ('分季度', '半年度', '季度报告', '按产品', '按行业')):
+        return -50
+    return 40 if any(word in context[-800:] for word in ('主要会计数据', '主要财务指标', '合并利润表', '合并现金流量表')) else 0
+
+
+def _pdf_pages(content: bytes, text: str) -> list[dict]:
+    pages: list[dict] = []
+    if pdfplumber is not None:
+        try:
+            with pdfplumber.open(io.BytesIO(content)) as pdf:
+                for number, page in enumerate(pdf.pages[:120], 1):
+                    page_text = page.extract_text(x_tolerance=2, y_tolerance=3) or ''
+                    tables = []
+                    # Table geometry is expensive: run it only on candidate financial pages.
+                    interesting = sum(label in page_text.replace('\n', '') for label in ('营业收入', '净利润', '现金流', '净资产收益率', '资产负债率')) >= 2
+                    for table in page.find_tables() if interesting else []:
+                        context = page.crop((0, 0, page.width, max(1, table.bbox[1]))).extract_text() or ''
+                        tables.append({'rows': table.extract(), 'context': context, 'bbox': table.bbox})
+                    pages.append({'page': number, 'text': page_text, 'tables': tables, 'total_pages': len(pdf.pages)})
+            if any(page['text'] for page in pages):
+                return pages
+        except Exception:
+            pass
+    # Keep per-page source locations when the table engine cannot read a PDF.
+    try:
+        reader = PdfReader(io.BytesIO(content), strict=False)
+        pages = [{'page': index, 'text': page.extract_text(extraction_mode='layout') or '', 'tables': []}
+                 for index, page in enumerate(reader.pages[:120], 1)]
+        if any(page['text'] for page in pages):
+            return pages
+    except Exception:
+        pass
+    return [{'page': None, 'text': text, 'tables': []}]
+
+
+def parse_pdf(file_name: str, content: bytes, *, money_unit: str | None = None,
+              percent_unit: str | None = None, year_hint: int | None = None) -> tuple[str | None, list[dict[str, Any]], list[str], str]:
+    text = extract_pdf_text(content)
+    company = _extract_company(text, file_name)
+    document_year = _document_report_year(text)
+    issuer_codes = _issuer_stock_codes(text)
+    report_year = _extract_year(text, file_name)
+    warnings: list[str] = []
+    errors: list[str] = []
+    problems: list[tuple[int | None, str, int, str]] = []
+    if report_year and year_hint and int(year_hint) != report_year:
+        errors.append(f'报告正文年度 {report_year} 与指定年度 {year_hint} 冲突，不能重标年份。')
+    file_year = re.search(r'(20\d{2})\s*年?\s*(?:年度报告|年度财务报告|年报)', Path(file_name).stem)
+    if file_year and report_year and int(file_year.group(1)) != report_year:
+        errors.append(f'文件名年度 {file_year.group(1)} 与报告正文年度 {report_year} 不一致，请核对原文件。')
+    report_year = report_year or year_hint
+    if re.search(r'20\d{2}\s*年\s*(?:半年度|上半年|下半年|第[一二三四1234]季度)', text[:1800] + file_name):
+        errors.append('该文件为半年/季度报告，当前年度指标库不支持直接作为全年入库。')
+    candidates: dict[tuple[int | None, str], list[dict]] = {}
+
+    def add(metric: str, raw: Any, year: int | None, unit_context: str, page: int | None, cell: str,
+            score: int, table_unit: str | None = None):
+        if blank(raw) or score < 0:
+            return
+        unit = detect_money_unit(unit_context) if metric in MONEY_METRICS else detect_percent_unit(unit_context)
+        unit = unit or (table_unit if metric in MONEY_METRICS else None)
+        if metric == 'eps':
+            unit = '元/股'
+        try:
+            if metric == 'audit_opinion':
+                value, unit, normalized = _audit_opinion(str(raw)), '文本', '文本'
+            else:
+                value, unit, normalized = normalize_metric(metric, raw, unit, money_unit, percent_unit)
+        except ValueError as error:
+            problems.append((year, metric, score, f'PDF 第 {page or "未知"} 页 {cell} {metric}：{error}'))
+            return
+        source = {'file_name': file_name, 'page': page, 'cell': cell, 'raw_value': str(raw),
+                  'raw_unit': unit, 'normalized_unit': normalized}
+        candidates.setdefault((year, metric), []).append({'value': value, 'score': score, 'source': source})
+
+    pages = _pdf_pages(content, text)
+    if pages and pages[0].get('total_pages', 0) > 120:
+        warnings.append(f'本文件共 {pages[0]["total_pages"]} 页，本次解析前 120 页；后续页未解析，缺失指标请另行提供相应财务表页。')
+    continued_header: list[int | None] = []
+    continued_context = ''
+    for page in pages:
+        table_metrics: set[str] = set()
+        for table_index, table in enumerate(page['tables'], 1):
+            header_years: dict[int, int] = {}
+            context = table['context']
+            for row_index, row in enumerate(table['rows'], 1):
+                values = [str(cell or '').strip() for cell in row]
+                year_cells = {index: _year(value) for index, value in enumerate(values) if _year(value)}
+                if year_cells and not _metric_label(values[0])[0]:
+                    header_years = year_cells
+                    continue
+                metric, score = _metric_label(values[0]) if values else (None, 0)
+                if not metric:
+                    context += '\n' + ' '.join(values)
+                    continue
+                score += _section_score(context)
+                if score < 0:
+                    continue
+                table_metrics.add(metric)
+                if header_years:
+                    for column, year in header_years.items():
+                        if column < len(values):
+                            add(metric, values[column], year, values[0], page['page'],
+                                f'表{table_index}!R{row_index}C{column + 1}', score + 20, _nearest_unit(context))
+                elif len([value for value in values[1:] if not blank(value)]) == 1:
+                    column = next(index for index in range(1, len(values)) if not blank(values[index]))
+                    add(metric, values[column], report_year, values[0], page['page'],
+                        f'表{table_index}!R{row_index}C{column + 1}', score + 20, _nearest_unit(context))
+                else:
+                    problems.append((report_year, metric, score + 20, f'PDF 第 {page["page"]} 页 {metric} 存在多列但无法确定年份表头，请人工复核。'))
+        lines = page['text'].splitlines()
+        preceding = continued_context
+        header_years = list(continued_header)
+        last_metric_line = 0
+        for line_index, line in enumerate(lines, 1):
+            metric, label, tail, score = _line_label(line)
+            # Explicit year headers bind following row cells, and are reset by a new table section.
+            if not metric:
+                years = re.findall(r'(?<!\d)(20\d{2})(?:\s*年)?(?!\d)', line)
+                if years and (len(years) > 1 or re.match(r'^\s*(?:项目|指标|20\d{2})', line)):
+                    # Preserve positions of percentage/delta columns between fiscal years.
+                    cells = re.findall(r'20\d{2}\s*年?|(?:本年|本期)[^\s]*(?:增减|增长|变动)[^\s]*|同比[^\s]*', line)
+                    header_years = [int(re.search(r'20\d{2}', cell).group()) if re.search(r'20\d{2}', cell) else None for cell in cells]
+                if re.match(r'^\s*[一二三四五六七八九十]+[、.]', line) and not years:
+                    header_years = []
+                    preceding = ''
+                preceding = (preceding + '\n' + line)[-1800:]
+                continue
+            if metric in table_metrics:
+                continue
+            score += _section_score(preceding)
+            if score < 0:
+                continue
+            last_metric_line = line_index
+            if metric == 'audit_opinion':
+                audit_text = tail or (lines[line_index] if line_index < len(lines) else '')
+                add(metric, audit_text, report_year, '', page['page'], f'文本行{line_index}', score)
+                continue
+            # Values belong to this physical row only; never scan neighbouring metric rows.
+            tail = re.sub(r'^\s*[（(][^）)]*(?:元|%|％|比例)[^）)]*[）)]', '', tail).lstrip(':： ')
+            tokens = [match.group(0).strip() for match in NUMBER_RE.finditer(tail)]
+            if not tokens:
+                continue
+            unit_context = line[:len(line) - len(tail)]
+            if header_years:
+                if len(tokens) < len(header_years):
+                    problems.append((report_year, metric, score, f'PDF 第 {page["page"]} 页 {metric} 数据列与年份表头不一致，请人工复核。'))
+                    continue
+                for column, year in enumerate(header_years):
+                    if year is None:
+                        continue
+                    add(metric, tokens[column], year, unit_context, page['page'],
+                        f'文本行{line_index}列{column + 1}', score, _nearest_unit(preceding))
+            elif len(tokens) == 1:
+                add(metric, tokens[0], report_year, unit_context, page['page'],
+                    f'文本行{line_index}列1', score, _nearest_unit(preceding))
+            else:
+                problems.append((report_year, metric, score, f'PDF 第 {page["page"]} 页 {metric} 的多列数值缺少明确年度表头，请人工复核。'))
+        # Carry a split table only when a metric row is actually at the page end.
+        continued_header = header_years if last_metric_line and len(lines) - last_metric_line <= 3 else []
+        continued_context = preceding[-800:] if continued_header else ''
+    for year, metric, score, error in problems:
+        better = [option for option in candidates.get((year, metric), []) if option['score'] > score]
+        if better:
+            warnings.append(error + ' 已跳过该候选，仅使用更高优先级的年度合并/主要会计数据表。')
+        else:
+            errors.append(error)
+    records_by_year: dict[int | None, dict] = {}
+    for (year, metric), options in candidates.items():
+        highest = max(option['score'] for option in options)
+        preferred = [option for option in options if option['score'] == highest]
+        values = {option['value'] for option in preferred}
+        if len(values) != 1:
+            errors.append(f'{year} 年 {metric} 在多个同级表格中数值冲突，不自动选择。')
+            continue
+        chosen = preferred[0]
+        record = records_by_year.setdefault(year, {'year': year, 'company_name': company, 'raw_source': file_name,
+                                                   '_provenance': {}, '_errors': []})
+        record[metric] = chosen['value']
+        record['_provenance'][metric] = chosen['source']
+    records = list(records_by_year.values())
+    if not records:
+        records = [{'year': report_year, 'company_name': company, 'raw_source': file_name,
+                    '_provenance': {}, '_errors': []}]
+        warnings.append('未提取到可核验数值；不会使用其他数据补齐，也不会创建空年度记录。')
+    for record in records:
+        record['_errors'] = list(dict.fromkeys(errors))
+        record['_report_year'] = document_year
+        record['_issuer_stock_codes'] = issuer_codes
+    if document_year is None:
+        warnings.append('正文标题/页头未识别到文档的报告年度；指标年度仍按表头复核，文档不会冒充指定年度年报。')
+    if not company:
+        warnings.append('PDF 标题未明确识别企业名称，请填写真实企业名称。')
+    if not report_year:
+        warnings.append('PDF 报告年度未明确识别，请核对正文及表头。')
+    warnings.extend(errors)
+    missing = [key for key in NUMERIC_METRICS if not any(record.get(key) is not None for record in records)]
+    if missing:
+        warnings.append('以下字段没有可信解析结果，保留缺失：' + '、'.join(missing))
+    warnings.append('PDF 仅提取可定位表格/文本行；扫描件、跨页合并表和复杂重述需人工复核。')
+    return company, records, list(dict.fromkeys(warnings)), text[:1600]
+
+
+def _num_from_context(text: str, labels: list[str], prefer_percent: bool = False, metric: str = '') -> float | None:
+    """Compatibility helper with row-local extraction; no wide-context guessing."""
+    for line in text.splitlines():
+        for label in sorted(labels, key=len, reverse=True):
+            if line.strip().startswith(label):
+                tail = line.strip()[len(label):]
+                tokens = [match.group(0).strip() for match in NUMBER_RE.finditer(tail)]
+                if len(tokens) == 1:
+                    key = metric or ('roe' if prefer_percent else 'revenue')
+                    unit = detect_percent_unit(line) if prefer_percent else detect_money_unit(line)
+                    try:
+                        return normalize_metric(key, tokens[0], unit)[0]
+                    except ValueError:
+                        return None
+    return None

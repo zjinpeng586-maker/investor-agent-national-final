@@ -1,0 +1,87 @@
+{
+  "revision": "2026-09-24-branding-v1",
+  "compileall": {
+    "exit_code": 0,
+    "command": "python -m compileall -q app core scripts tests"
+  },
+  "pytest": {
+    "exit_code": 0,
+    "passed": 431,
+    "failed": 0,
+    "elapsed_seconds": 167.68
+  },
+  "browser": {
+    "passed": true,
+    "checks": [
+      "local logo, exact title/favicon, complete text and 42px original ratio",
+      "mobile sidebar text fits without truncation or horizontal overflow",
+      "real annual query and follow-up",
+      "data-center tabs and actual source records",
+      "company selection and report scope remain unchanged across page navigation",
+      "five functional pages and branded PDF download"
+    ],
+    "desktop": {
+      "src": "data:image/png;base64,iVBORw0K",
+      "loaded": true,
+      "ratio": 1,
+      "boxRatio": 1,
+      "height": 42,
+      "fit": "contain"
+    }
+  },
+  "database": {
+    "passed": true,
+    "verified_metric_values": 237,
+    "counts": {
+      "companies": 10,
+      "financial_metrics": 30,
+      "metric_sources": 237,
+      "report_files": 10
+    },
+    "legacy_data_preserved": true,
+    "integrity_check": "ok",
+    "foreign_key_check": "passed",
+    "migration_marker": "done"
+  },
+  "pdf": {
+    "source": "C:\\Users\\25131\\Documents\\Codex\\2026-09-23\\codex-threads-01a0cbcf-97db-7763-bc4e\\work\\branding\\browser\\current-report.pdf",
+    "pages": 8,
+    "metadata": {
+      "format": "PDF 1.4",
+      "title": "擎梦数智｜财报智问｜比亚迪股份有限公司｜上市公司财务智能分析报告",
+      "author": "擎梦数智｜财报智问",
+      "subject": "上市公司财务智能分析报告",
+      "keywords": "",
+      "creator": "(unspecified)",
+      "producer": "ReportLab PDF Library - (opensource)",
+      "creationDate": "D:20260924053220+08'00'",
+      "modDate": "D:20260924053220+08'00'",
+      "trapped": "",
+      "encryption": null
+    },
+    "sha256": "358225b2485fb2510e36791c30c390c4f4aa7d64416ac48de51438a831af8cc6",
+    "bytes": 20724,
+    "expected_company": "比亚迪股份有限公司",
+    "company_scope_verified": true,
+    "all_pages_branded": true,
+    "a4_text_and_vectors_in_bounds": true,
+    "visual_review": "All 8 Poppler-rendered pages inspected; no clipping, overlap or damaged glyphs.",
+    "scope": "Branding and layout only; underlying financial data unchanged."
+  },
+  "logo": {
+    "file": "app/assets/brand/qingmeng-shuzhi-logo.png",
+    "sha256": "6ec266af73343f3cefc07a741a4119a1e86c9291535b12aea62ffcb9934e7722",
+    "source": "user-supplied asset",
+    "original_bytes_preserved": true,
+    "height_px": 42,
+    "missing_asset_behavior": "text only; no broken image or replacement symbol"
+  },
+  "dependencies_changed": false,
+  "schema_changed": false,
+  "legacy_names": "Only explicitly marked historical records, historical design requirements and migration references.",
+  "limits": [
+    "macOS hardware not tested",
+    "cloud deployment not tested",
+    "online disclosure network calls mocked in automated tests"
+  ]
+}

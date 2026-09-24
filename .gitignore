@@ -9,3 +9,8 @@ __pycache__/
 data/uploads/
 data/online_cache/
 data/rag_index/
+data/workspaces/
+*.db
+*.db-wal
+*.db-shm
+backups/

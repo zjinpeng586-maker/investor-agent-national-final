@@ -1,0 +1,51 @@
+{
+  "date": "2026-09-24",
+  "layout_revision": "2026-09-24-wrapped-tables-v2",
+  "regression": {
+    "passed": 45,
+    "failed": 0,
+    "pdf_layout_tests": 11,
+    "test_files": [
+      "test_report_pdf_layout.py",
+      "test_analysis_integrity.py",
+      "test_version1_ui.py",
+      "test_historical_answer_integrity.py",
+      "test_v1_regression.py"
+    ]
+  },
+  "syntax_check": "passed",
+  "browser_downloads": {
+    "passed": true,
+    "checks": [
+      {
+        "company": "比亚迪股份有限公司",
+        "file": "byd-web.pdf",
+        "suggestedName": "比亚迪股份有限公司_财务分析报告.pdf"
+      },
+      {
+        "company": "宁德时代新能源科技股份有限公司",
+        "file": "catl-web.pdf",
+        "suggestedName": "宁德时代新能源科技股份有限公司_财务分析报告.pdf"
+      }
+    ]
+  },
+  "pdf_geometry": [
+    {
+      "file": "byd-web.pdf",
+      "pages": 8,
+      "out_of_bounds": [],
+      "updated_footer": true
+    },
+    {
+      "file": "catl-web.pdf",
+      "pages": 8,
+      "out_of_bounds": [],
+      "updated_footer": true
+    }
+  ],
+  "rendered_pages_reviewed": 16,
+  "geometry_method": "Unclipped text spans and vector bounds; page margins and body/footer bounds checked by layout regression tests.",
+  "database_schema_changed": false,
+  "dependency_versions_changed": false,
+  "platform": "Windows; macOS and cloud deployment not rerun for this change"
+}

@@ -1,0 +1,79 @@
+{
+  "feature": "financial-attribution-mvp",
+  "pytest": {
+    "passed": 321,
+    "failed": 0,
+    "duration": "69.00s (0:01:08)"
+  },
+  "benchmark": {
+    "passed": 55,
+    "total": 55,
+    "failed": 0
+  },
+  "browser": {
+    "passed": true,
+    "checks": [
+      "普通净利润数值查询不生成归因树",
+      "原因问答展示准确年度变化和三项线索",
+      "指标独立来源与真实执行记录可展开",
+      "浏览器深色偏好下归因卡片可读",
+      "窄屏归因卡片纵向排列且无内部横向溢出",
+      "最近会话恢复包含原归因结果",
+      "多企业对比保持原功能且不被缩成单企业归因",
+      "缺失比较基期明确提示且主回答保留",
+      "同年度PDF解释证据可定位原文并下载原件（合成验收材料）"
+    ],
+    "errors": []
+  },
+  "visual": [
+    {
+      "width": 1280,
+      "mode": "light",
+      "pageOverflow": false,
+      "nodeOverflow": false,
+      "color": "rgb(24, 42, 67)",
+      "background": "rgb(237, 242, 255)",
+      "gridColumns": "369.328px 369.328px 369.344px",
+      "nodes": 4
+    },
+    {
+      "width": 1280,
+      "mode": "dark",
+      "pageOverflow": false,
+      "nodeOverflow": false,
+      "color": "rgb(24, 42, 67)",
+      "background": "rgb(237, 242, 255)",
+      "gridColumns": "369.328px 369.328px 369.344px",
+      "nodes": 4
+    },
+    {
+      "width": 600,
+      "mode": "light",
+      "pageOverflow": false,
+      "nodeOverflow": false,
+      "color": "rgb(24, 42, 67)",
+      "background": "rgb(237, 242, 255)",
+      "gridColumns": "544px",
+      "nodes": 4
+    },
+    {
+      "width": 600,
+      "mode": "dark",
+      "pageOverflow": false,
+      "nodeOverflow": false,
+      "color": "rgb(24, 42, 67)",
+      "background": "rgb(237, 242, 255)",
+      "gridColumns": "544px",
+      "nodes": 4
+    }
+  ],
+  "original_release_unchanged": true,
+  "schema_dependencies_startup_unchanged": true,
+  "git_metadata_provided": false,
+  "changed_existing_files": [
+    "README.md",
+    "app/main.py",
+    "app/styles.css",
+    "core/qa_engine.py"
+  ]
+}

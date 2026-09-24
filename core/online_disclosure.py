@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urljoin
+from hashlib import sha256
+from uuid import uuid4
+
+from core.downloads import safe_download_pdf, validate_pdf_bytes
+from core.storage import get_data_root, require_write_access
 
 import requests
 
@@ -17,8 +22,7 @@ except Exception:  # pragma: no cover - optional dependency alternate_path
     curl_requests = None
 
 ROOT = Path(__file__).resolve().parents[1]
-ONLINE_CACHE_DIR = ROOT / 'data' / 'online_cache'
-ONLINE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+ONLINE_CACHE_DIR = get_data_root() / 'online_cache'
 
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36 InvestorAgent/1.0'
 
@@ -156,6 +160,26 @@ def _safe_json_from_text(text: str) -> Any:
             except Exception:
                 return None
     return None
+
+
+def _validated_search_json(text: str) -> Any:
+    """An HTTP 200/error page is not a completed disclosure search."""
+    data = _safe_json_from_text(text)
+    if isinstance(data, dict):
+        if data.get('success') is False or data.get('error'):
+            raise ValueError('交易所接口返回错误：' + str(data.get('message') or data.get('error'))[:100])
+        code = data.get('code')
+        if code is not None and str(code).lower() not in {'0', '200', '0000', 'success'}:
+            raise ValueError('交易所接口返回错误代码：' + str(code)[:40])
+    def has_rows(value):
+        if isinstance(value, list):
+            return all(isinstance(row, dict) or (isinstance(row, list) and has_rows(row)) for row in value)
+        if isinstance(value, dict):
+            return any(has_rows(value[key]) for key in ('data', 'result', 'announcements', 'list', 'rows', 'pageHelp') if key in value)
+        return False
+    if not has_rows(data):
+        raise ValueError('响应解析失败：未返回有效的披露结果列表。')
+    return data
 
 
 def _normalize_pdf_url(raw_url: str, base: str) -> str:
@@ -473,6 +497,7 @@ class SearchDetails:
             'bytes': size,
             'parsed': parsed,
             'error': error[:120] if error else '',
+            'success': str(status) == '200' and not error,
         })
 
     def as_dict(self) -> dict[str, Any]:
@@ -519,7 +544,7 @@ def _search_szse_content_once(
             if diag:
                 diag.req(keyword, range_value, page, f'HTTP {r.status_code}', size, 0)
             return []
-        data = _safe_json_from_text(r.text)
+        data = _validated_search_json(r.text)
         items = _items_from_szse_search_json(data, query, '深交所', 'https://www.szse.cn/')
         if diag:
             diag.req(keyword, range_value, page, '200', size, len(items))
@@ -672,7 +697,7 @@ def _search_sse_impl(query: str, report_type: str = '年度报告', year: int | 
             status = str(r.status_code)
             parsed = 0
             if r.status_code == 200:
-                data = _safe_json_from_text(r.text)
+                data = _validated_search_json(r.text)
                 items = _items_from_sse_json(data, '上交所')
                 parsed = len(items)
                 for it in items:
@@ -849,10 +874,12 @@ def _search_szse_impl(query: str, report_type: str = '年度报告', year: int |
         try:
             r = s.get('https://www.szse.cn/api/disc/announcement/annList', params=params, headers=headers, timeout=timeout)
             if r.status_code == 200:
-                items = _items_from_any_json(_safe_json_from_text(r.text), '深交所', base)
+                items = _items_from_any_json(_validated_search_json(r.text), '深交所', base)
                 add_items(items)
                 if diag:
                     diag.req('annList', 'api', params.get('pageNum','1'), '200', len(r.text or ''), len(items))
+            elif diag:
+                diag.req('annList', 'api', params.get('pageNum', '1'), f'HTTP {r.status_code}', len(r.text or ''), 0)
         except Exception as e:
             if diag:
                 diag.req('annList', 'api', params.get('pageNum','1'), 'EXCEPTION', 0, 0, repr(e))
@@ -892,24 +919,62 @@ def search_disclosures(query: str, source: str = '自动判断', report_type: st
     return []
 
 
-def search_disclosures_with_details(query: str, source: str = '自动判断', report_type: str = '年度报告', year: int | None = None, limit: int = 20) -> tuple[list[DisclosureItem], dict[str, Any]]:
-    """Search disclosures and return detail information for the Streamlit UI."""
+def search_disclosures_with_details(query: str, source: str = '自动判断', report_type: str = '年度报告', year: int | None = None, limit: int = 20) -> dict[str, Any]:
+    """Separate actual empty responses from transport, API and parse failures.
+
+    Candidates remain DisclosureItem objects; diagnostics keep the previous
+    steps/requests shape so the detailed UI can display every attempted request.
+    """
+    started = time.monotonic()
     q = (query or '').strip()
-    if not q:
-        return [], {'steps': ['输入为空。'], 'requests': [], 'elapsed_sec': 0}
-    if source in ('深交所', 'szse') or (source in ('自动判断', 'auto') and guess_exchange(q) == 'szse'):
-        return search_szse_with_details(q, report_type, year, limit, timeout=5)
-    if source in ('上交所', 'sse') or (source in ('自动判断', 'auto') and guess_exchange(q) == 'sse'):
-        return search_sse_with_details(q, report_type, year, limit, timeout=6)
     diag = SearchDetails()
-    diag.add('无法判断交易所，先尝试上交所和深交所普通检索。')
-    try:
-        items = search_disclosures(q, source, report_type, year, limit)
-        diag.add(f'普通检索返回 {len(items)} 条。')
-        return items, diag.as_dict()
-    except Exception as e:
-        diag.add(f'检索异常：{e}')
-        return [], diag.as_dict()
+    candidates: list[DisclosureItem] = []
+    exchange = {'上交所': 'sse', '深交所': 'szse'}.get(source, source.lower())
+    if exchange in ('自动判断', 'auto'):
+        exchange = guess_exchange(q) or 'both'
+    if not q:
+        diag.add('请输入公司名称或股票代码。')
+    elif exchange not in ('sse', 'szse', 'both'):
+        diag.add('不支持的交易所检索条件。')
+    else:
+        routes = [('sse', search_sse_with_details, 6), ('szse', search_szse_with_details, 5)]
+        for name, search, timeout in routes:
+            if exchange not in (name, 'both'):
+                continue
+            try:
+                items, details = search(q, report_type, year, limit, timeout=timeout)
+                requests_log = details.get('requests') or []
+                diag.steps.extend(details.get('steps') or [])
+                diag.requests.extend(dict(row, exchange=name) for row in requests_log)
+                if not requests_log:
+                    diag.req(q, name, '1', 'NO_RESPONSE', error='没有有效请求响应。')
+                for item in items:
+                    if not isinstance(item, DisclosureItem) or not item.url:
+                        raise ValueError('候选披露结构无效。')
+                    if not any(existing.url == item.url for existing in candidates):
+                        candidates.append(item)
+            except Exception as exc:
+                diag.req(q, name, '1', 'EXCEPTION', error=str(exc))
+                diag.add(f'{name} 检索失败：{str(exc)[:160]}')
+    candidates = candidates[:max(0, limit)]
+    succeeded = sum(bool(row.get('success', str(row.get('status')) == '200' and not row.get('error'))) for row in diag.requests)
+    failed = len(diag.requests) - succeeded
+    status = 'success' if candidates else ('empty' if succeeded else 'failed')
+    if status == 'success':
+        message = f'检索完成：共获取 {len(candidates)} 条符合条件的公开披露。'
+    elif status == 'empty':
+        message = '检索完成，但未找到符合条件的公开披露。请检查公司名称或股票代码、交易所、报告类型和年份。'
+    else:
+        reason = next((row.get('error') or str(row.get('status')) for row in diag.requests if not row.get('success')), None)
+        reason = reason or (diag.steps[-1] if diag.steps else '没有任何有效响应')
+        message = f'检索失败：{str(reason).rstrip("。")[:160]}。请查看检索详情后重试。'
+    elapsed = round(time.monotonic() - started, 3)
+    diagnostics = diag.as_dict()
+    diagnostics['elapsed_sec'] = elapsed
+    return {'status': status, 'candidates': candidates, 'candidate_count': len(candidates),
+            'message': message, 'query': q, 'exchange': exchange, 'report_type': report_type,
+            'year': year, 'request_success_count': succeeded, 'request_failure_count': failed,
+            'elapsed_sec': elapsed, 'diagnostics': diagnostics}
 
 
 def _pdf_request_headers(url: str) -> dict[str, str]:
@@ -1079,43 +1144,19 @@ def _download_pdf_bytes_strict(url: str, timeout: int = 30, retries: int = 3) ->
 
 
 def download_pdf(url: str, file_name: str | None = None, timeout: int = 30) -> tuple[str, bytes]:
-    """Download a PDF URL, resolving disclosure detail pages when needed.
-
-    Important: a URL ending with .pdf is not enough. SSE sometimes returns an
-    HTML error/redirect page to programmatic clients. We now require a real
-    ``%PDF`` header before invoking PDF parsers, preventing confusing errors
-    such as ``No /Root object`` or ``Stream has ended unexpectedly``.
-    """
-    if not url or not url.lower().startswith(('http://', 'https://')):
-        raise ValueError('请输入有效的 http/https 链接。')
-
-    # First try strict PDF download. If it is a detail page rather than a PDF,
-    # parse PDF links from the page and recurse.
-    try:
-        content, headers, final_url, notes = _download_pdf_bytes_strict(url, timeout=timeout, retries=3)
-    except ValueError as e:
-        # If the supplied URL is not a direct PDF, try to download it as HTML and
-        # discover PDF links. This keeps PDF-link import usable for disclosure detail pages.
-        try:
-            raw, raw_headers, _ = _download_binary_once(url, timeout=timeout)
-            html = raw.decode('utf-8', errors='ignore')
-            found_items = _items_from_html(html, '在线披露', url)
-            pdf_links = [x.url for x in found_items] or _pdf_links_from_text(html, url)
-            if pdf_links:
-                return download_pdf(pdf_links[0], file_name=file_name, timeout=timeout)
-        except Exception:
-            pass
-        raise e
-
-    name_source = file_name or Path((final_url or url).split('?')[0]).name or f'online_report_{int(time.time())}.pdf'
-    name = re.sub(r'[\\/:*?"<>|]+', '_', name_source)
-    if not name.lower().endswith('.pdf'):
-        name += '.pdf'
-    return name, content
+    """Use the single bounded downloader; never fall back to legacy fetchers."""
+    return safe_download_pdf(url, file_name=file_name, timeout=timeout)
 
 
 def cache_pdf(content: bytes, file_name: str) -> Path:
-    safe_name = re.sub(r'[^\w\-.\u4e00-\u9fa5]+', '_', file_name)
-    path = ONLINE_CACHE_DIR / safe_name
-    path.write_bytes(content)
+    require_write_access()
+    validate_pdf_bytes(content)
+    safe_name = re.sub(r'[^\w\-.\u4e00-\u9fa5]+', '_', Path(str(file_name).replace('\\', '/')).name).strip(' .')[:120] or 'report.pdf'
+    if not safe_name.lower().endswith('.pdf'):
+        safe_name += '.pdf'
+    cache_root = get_data_root() / 'online_cache'
+    cache_root.mkdir(parents=True, exist_ok=True)
+    path = cache_root / f'{sha256(content).hexdigest()[:16]}_{uuid4().hex}_{safe_name}'
+    with path.open('xb') as handle:
+        handle.write(content)
     return path

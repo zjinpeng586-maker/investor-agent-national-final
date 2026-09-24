@@ -1,0 +1,60 @@
+{
+  "version": "reliability-20260924",
+  "pytest": {
+    "passed": 237,
+    "failed": 0,
+    "duration": "64.50s (0:01:04)"
+  },
+  "browser": {
+    "passed": true,
+    "checks": [
+      "未知公司不替换为当前企业",
+      "半年报不能替换为全年",
+      "缺失年度不回退最新年",
+      "真实SQL及精确年份返回",
+      "回答内TXT和PDF下载",
+      "独立个人库与真实PDF导入复核",
+      "原文页查看及原文件下载",
+      "不完整数据不评分及混合单位图表",
+      "资料库特殊字符搜索",
+      "分库恢复原会话且不污染演示",
+      "Benchmark 55/55",
+      "扩展Benchmark真实运行与JSON下载"
+    ],
+    "errors": []
+  },
+  "admin": {
+    "status": "passed",
+    "platform": "win32",
+    "python": "3.11.9",
+    "checks": [
+      "legacy copy preserves original DB and attachment hashes",
+      "legacy provenance explicitly unverified",
+      "migration refuses existing personal directory",
+      "SQLite online backup includes committed WAL data",
+      "separate backups have unique paths",
+      "restoration retains DB value and rewrites attachment paths",
+      "restore refuses existing destination",
+      "unmanifested/tampered attachments rejected",
+      "reset performs no deletion",
+      "installer check-only validates Python and pinned requirements",
+      "daily startup has no pip installation and binds loopback",
+      "copied Windows drive prefix rebased to actual copied attachments",
+      "backup/verify/restore CLI entrypoints execute successfully"
+    ],
+    "macos_live_test": false
+  },
+  "official_download": {
+    "success": true,
+    "name": "1222881496.PDF",
+    "size": 10092140,
+    "sha256": "e9c2d7fdd088e151ccb6c8ad3d95587b2b014b10f2c9731508d23ce07fde4de3",
+    "elapsed_seconds": 1.471
+  },
+  "limitations": [
+    "macOS not run on hardware",
+    "fresh virtualenv full install not tested",
+    "no live cloud model key",
+    "no production concurrency test"
+  ]
+}

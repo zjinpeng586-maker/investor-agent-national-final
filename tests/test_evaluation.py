@@ -24,6 +24,7 @@ def test_suite_is_auditable_and_case_ids_are_unique():
     assert all(case.get('category') and 'expected' in case for case in suite['cases'])
     assert set(case['category'] for case in suite['cases']) == {
         'conversation', 'planner', 'text_to_sql', 'sql_security', 'rag_citation',
+        'query_integrity', 'data_integrity', 'analysis_integrity', 'cloud_facts',
     }
 
 
@@ -61,6 +62,14 @@ def test_benchmark_executes_all_real_categories_and_serializes():
     assert not ({3, 4} & set(by_id['rag_profit_reason_page']['actual']['pages']))
     assert by_id['rag_unrelated']['actual']['status'] == 'no_evidence'
     assert by_id['rag_numeric_without_reason']['actual']['status'] == 'no_evidence'
+    assert by_id['integrity_unknown_company']['actual']['status'] == 'unknown_company'
+    assert by_id['integrity_half_year']['actual']['status'] == 'unsupported_period'
+    assert by_id['integrity_multi_company']['actual']['row_count'] == 4
+    assert by_id['integrity_pdf_distinct_rows']['actual']['net_profit'] == 10
+    assert by_id['integrity_pdf_distinct_rows']['actual']['audit_opinion'] == '标准无保留意见'
+    assert by_id['integrity_seed_preserves_import']['actual']['revenue'] == 123.45
+    assert by_id['integrity_metric_provenance']['actual']['revenue_file'] == 'original.csv'
+    assert result['failed'] == 0, [(case['id'], case['error'], case['actual']) for case in result['cases'] if not case['passed']]
 
 
 def test_case_failure_isolated_and_repeatability_is_deterministic():
@@ -94,3 +103,32 @@ def test_evaluation_ui_runs_real_benchmark_and_exposes_details_download():
     assert any(metric.label == '总样本数' and int(metric.value) == result['total'] for metric in app.metric)
     assert any('Case ID' in frame.value.columns for frame in app.dataframe)
     assert any(button.label == '下载 Benchmark JSON' for button in app.download_button)
+
+
+def test_benchmark_never_reads_or_modifies_main_database(tmp_path, monkeypatch):
+    from core import db, evaluation
+    from core.storage import get_workspace, workspace_context
+
+    monkeypatch.setenv('FINANCIAL_DATA_DIR', str(tmp_path))
+    with workspace_context('main', tmp_path / 'main', allow_writes=True):
+        db.init_db()
+        company_id = db.upsert_company('评测隔离保护企业')
+        db.upsert_metric(company_id, {'year': 2024, 'revenue': 321})
+        database = db.get_db_path()
+        before = database.read_bytes()
+        seen = []
+        execute = evaluation._evaluate_case
+
+        def audit_workspace(*args, **kwargs):
+            seen.append((get_workspace(), db.get_db_path()))
+            assert get_workspace() == 'evaluation'
+            assert db.get_db_path() != database
+            assert all(row['name'] != '评测隔离保护企业' for row in db.fetch_companies())
+            return execute(*args, **kwargs)
+
+        monkeypatch.setattr(evaluation, '_evaluate_case', audit_workspace)
+        suite = load_benchmark_suite()
+        result = run_benchmark(suite)
+        assert seen and result['failed'] == 0
+        assert database.read_bytes() == before
+        assert get_workspace() == 'main'

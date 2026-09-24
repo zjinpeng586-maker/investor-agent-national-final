@@ -71,12 +71,7 @@ STEP_TEXT: dict[str, str] = {
 
 
 def build_agent_trace(intent: str, parsed: dict[str, Any] | None = None) -> list[dict[str, str]]:
-    """Return a visible multi-agent orchestration trace for the current task.
-
-    The project still keeps deterministic local functions as the execution core,
-    but exposes a multi-agent coordination layer so judges and users can see
-    which specialized capability is responsible for each step.
-    """
+    """Return a plan only. Execution events are recorded by the actual caller."""
     parsed = parsed or {}
     names = INTENT_AGENT_MAP.get(intent, INTENT_AGENT_MAP['unknown'])
     trace: list[dict[str, str]] = []
@@ -85,7 +80,7 @@ def build_agent_trace(intent: str, parsed: dict[str, Any] | None = None) -> list
             '步骤': str(idx),
             '智能体': name,
             '任务': STEP_TEXT.get(name, ''),
-            '状态': '已调用' if intent not in {'out_of_scope', 'refusal'} or name == '问答调度智能体' else '已跳过',
+            '状态': '计划执行',
         })
     return trace
 
@@ -95,7 +90,9 @@ def agent_trace_text(trace: list[dict[str, str]]) -> str:
         return '暂无智能体调用记录。'
     lines = []
     for item in trace:
-        lines.append(f"{item['步骤']}. {item['智能体']}：{item['任务']}（{item['状态']}）")
+        duration = f"，{item['耗时ms']} ms" if '耗时ms' in item else ''
+        reason = f"；{item['原因']}" if item.get('原因') else ''
+        lines.append(f"{item['步骤']}. {item['智能体']}：{item['任务']}（{item['状态']}{duration}{reason}）")
     return '\n'.join(lines)
 
 

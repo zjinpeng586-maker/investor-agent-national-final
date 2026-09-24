@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 cd "$(dirname "$0")"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "未检测到 python3。请先安装 Python 3.10 或以上版本。"
+if [ ! -x ".venv/bin/python" ]; then
+  echo "First run: bash install_mac.sh. Daily startup never installs packages."
   exit 1
 fi
-
-if [ ! -d ".venv" ]; then
-  python3 -m venv .venv
-fi
-
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-streamlit run app/main.py
+export FINANCIAL_DEPLOYMENT=local
+export FINANCIAL_WORKSPACE=main
+export FINANCIAL_DATA_DIR="${FINANCIAL_DATA_DIR:-$HOME/Library/Application Support/FinancialReportQA/data}"
+echo "Data directory: $FINANCIAL_DATA_DIR"
+exec ./.venv/bin/python -m streamlit run app/main.py --server.address 127.0.0.1 --server.port 8501

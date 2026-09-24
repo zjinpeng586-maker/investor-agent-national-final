@@ -1,0 +1,1221 @@
+{
+  "suite_id": "financial_qa_reliability_v2",
+  "suite_version": "2.0.0",
+  "description": "Isolated offline regression of query scope, import integrity, evidence, analysis and cloud fact guards",
+  "started_at": "2026-09-23T18:35:20.402865+00:00",
+  "data_scope": "独立临时评测库，不读写业务资料库",
+  "duration_ms": 1000.159,
+  "total": 55,
+  "passed": 55,
+  "failed": 0,
+  "pass_rate": 1.0,
+  "categories": {
+    "conversation": {
+      "passed": 5,
+      "total": 5,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "label": "多轮上下文"
+    },
+    "planner": {
+      "passed": 5,
+      "total": 5,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "label": "Planner 路由"
+    },
+    "text_to_sql": {
+      "passed": 5,
+      "total": 5,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "label": "Text-to-SQL 结果正确性"
+    },
+    "sql_security": {
+      "passed": 9,
+      "total": 9,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "label": "SQL 安全"
+    },
+    "rag_citation": {
+      "passed": 5,
+      "total": 5,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "label": "RAG 页码与证据"
+    },
+    "query_integrity": {
+      "passed": 9,
+      "total": 9,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "label": "企业与报告期约束"
+    },
+    "analysis_integrity": {
+      "passed": 5,
+      "total": 5,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "label": "增长率与缺失数据"
+    },
+    "cloud_facts": {
+      "passed": 2,
+      "total": 2,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "label": "云端事实保护"
+    },
+    "data_integrity": {
+      "passed": 10,
+      "total": 10,
+      "failed": 0,
+      "pass_rate": 1.0,
+      "label": "导入与逐指标来源"
+    }
+  },
+  "cases": [
+    {
+      "id": "conv_year_followup",
+      "category": "conversation",
+      "scenario": "比亚迪2024年营业收入是多少？ → 那2023年呢？",
+      "expected": {
+        "status": "ready",
+        "companies": [
+          "比亚迪股份有限公司"
+        ],
+        "years": [
+          2023
+        ],
+        "metrics": [
+          "revenue"
+        ],
+        "intent": "finance_query"
+      },
+      "actual": {
+        "status": "ready",
+        "companies": [
+          "比亚迪股份有限公司"
+        ],
+        "years": [
+          2023
+        ],
+        "metrics": [
+          "revenue"
+        ],
+        "intent": "finance_query"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.184
+    },
+    {
+      "id": "conv_company_followup",
+      "category": "conversation",
+      "scenario": "比亚迪2024年净利润是多少？ → 宁德时代呢？",
+      "expected": {
+        "status": "ready",
+        "companies": [
+          "宁德时代新能源科技股份有限公司"
+        ],
+        "years": [
+          2024
+        ],
+        "metrics": [
+          "net_profit"
+        ],
+        "intent": "finance_query"
+      },
+      "actual": {
+        "status": "ready",
+        "companies": [
+          "宁德时代新能源科技股份有限公司"
+        ],
+        "years": [
+          2024
+        ],
+        "metrics": [
+          "net_profit"
+        ],
+        "intent": "finance_query"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.109
+    },
+    {
+      "id": "conv_four_turns",
+      "category": "conversation",
+      "scenario": "比亚迪2024年营收 → 那2023年呢 → 宁德时代呢 → 净利润呢",
+      "expected": {
+        "status": "ready",
+        "companies": [
+          "宁德时代新能源科技股份有限公司"
+        ],
+        "years": [
+          2023
+        ],
+        "metrics": [
+          "net_profit"
+        ],
+        "intent": "finance_query"
+      },
+      "actual": {
+        "status": "ready",
+        "companies": [
+          "宁德时代新能源科技股份有限公司"
+        ],
+        "years": [
+          2023
+        ],
+        "metrics": [
+          "net_profit"
+        ],
+        "intent": "finance_query"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.15
+    },
+    {
+      "id": "conv_explicit_override",
+      "category": "conversation",
+      "scenario": "比亚迪2024年营业收入是多少？ → 宁德时代2025年净利润是多少？",
+      "expected": {
+        "status": "ready",
+        "companies": [
+          "宁德时代新能源科技股份有限公司"
+        ],
+        "years": [
+          2025
+        ],
+        "metrics": [
+          "net_profit"
+        ],
+        "intent": "finance_query"
+      },
+      "actual": {
+        "status": "ready",
+        "companies": [
+          "宁德时代新能源科技股份有限公司"
+        ],
+        "years": [
+          2025
+        ],
+        "metrics": [
+          "net_profit"
+        ],
+        "intent": "finance_query"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.072
+    },
+    {
+      "id": "conv_metric_clarification",
+      "category": "conversation",
+      "scenario": "比亚迪财务数据是多少？",
+      "expected": {
+        "status": "needs_clarification",
+        "field": "metric"
+      },
+      "actual": {
+        "status": "needs_clarification",
+        "field": "metric"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.04
+    },
+    {
+      "id": "plan_sql",
+      "category": "planner",
+      "scenario": "比亚迪2024年营业收入是多少？",
+      "expected": {
+        "route": "sql"
+      },
+      "actual": {
+        "route": "sql"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.009
+    },
+    {
+      "id": "plan_rag",
+      "category": "planner",
+      "scenario": "比亚迪2024年年报如何描述研发投入？",
+      "expected": {
+        "route": "rag"
+      },
+      "actual": {
+        "route": "rag"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.004
+    },
+    {
+      "id": "plan_hybrid_reason",
+      "category": "planner",
+      "scenario": "比亚迪2024年净利润为什么变化？",
+      "expected": {
+        "route": "hybrid",
+        "structured_intent": "trend_analysis"
+      },
+      "actual": {
+        "route": "hybrid",
+        "structured_intent": "trend_analysis"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.005
+    },
+    {
+      "id": "plan_hybrid_report_number",
+      "category": "planner",
+      "scenario": "比亚迪2024年年报中的净利润是多少？",
+      "expected": {
+        "route": "hybrid",
+        "structured_intent": "finance_query"
+      },
+      "actual": {
+        "route": "hybrid",
+        "structured_intent": "finance_query"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.005
+    },
+    {
+      "id": "plan_hybrid_compare",
+      "category": "planner",
+      "scenario": "比亚迪和宁德时代财务表现差异可能来自哪些业务因素？",
+      "expected": {
+        "route": "hybrid",
+        "structured_intent": "company_compare"
+      },
+      "actual": {
+        "route": "hybrid",
+        "structured_intent": "company_compare"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.004
+    },
+    {
+      "id": "sql_byd_2024_revenue",
+      "category": "text_to_sql",
+      "scenario": "",
+      "expected": {
+        "rows": [
+          {
+            "company": "比亚迪股份有限公司",
+            "year": 2024,
+            "revenue": 7771.02
+          }
+        ]
+      },
+      "actual": {
+        "status": "success",
+        "rows": [
+          {
+            "year": 2024,
+            "revenue": 7771.02,
+            "company": "比亚迪股份有限公司"
+          }
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 2.394
+    },
+    {
+      "id": "sql_byd_2024_profit",
+      "category": "text_to_sql",
+      "scenario": "",
+      "expected": {
+        "rows": [
+          {
+            "company": "比亚迪股份有限公司",
+            "year": 2024,
+            "net_profit": 402.54
+          }
+        ]
+      },
+      "actual": {
+        "status": "success",
+        "rows": [
+          {
+            "year": 2024,
+            "net_profit": 402.54,
+            "company": "比亚迪股份有限公司"
+          }
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 1.164
+    },
+    {
+      "id": "sql_byd_two_year_revenue",
+      "category": "text_to_sql",
+      "scenario": "",
+      "expected": {
+        "rows": [
+          {
+            "company": "比亚迪股份有限公司",
+            "year": 2023,
+            "revenue": 6023.15
+          },
+          {
+            "company": "比亚迪股份有限公司",
+            "year": 2024,
+            "revenue": 7771.02
+          }
+        ]
+      },
+      "actual": {
+        "status": "success",
+        "rows": [
+          {
+            "year": 2023,
+            "revenue": 6023.15,
+            "company": "比亚迪股份有限公司"
+          },
+          {
+            "year": 2024,
+            "revenue": 7771.02,
+            "company": "比亚迪股份有限公司"
+          }
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.699
+    },
+    {
+      "id": "sql_byd_multi_metric",
+      "category": "text_to_sql",
+      "scenario": "",
+      "expected": {
+        "rows": [
+          {
+            "company": "比亚迪股份有限公司",
+            "year": 2024,
+            "revenue": 7771.02,
+            "net_profit": 402.54,
+            "operating_cashflow": 1334.54
+          }
+        ]
+      },
+      "actual": {
+        "status": "success",
+        "rows": [
+          {
+            "year": 2024,
+            "operating_cashflow": 1334.54,
+            "company": "比亚迪股份有限公司",
+            "net_profit": 402.54,
+            "revenue": 7771.02
+          }
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.483
+    },
+    {
+      "id": "sql_compare_2024",
+      "category": "text_to_sql",
+      "scenario": "",
+      "expected": {
+        "rows": [
+          {
+            "company": "比亚迪股份有限公司",
+            "year": 2024,
+            "revenue": 7771.02,
+            "net_profit": 402.54,
+            "operating_cashflow": 1334.54
+          },
+          {
+            "company": "宁德时代新能源科技股份有限公司",
+            "year": 2024,
+            "revenue": 3620.13,
+            "net_profit": 507.45,
+            "operating_cashflow": 969.9
+          }
+        ]
+      },
+      "actual": {
+        "status": "success",
+        "rows": [
+          {
+            "year": 2024,
+            "operating_cashflow": 969.9,
+            "company": "宁德时代新能源科技股份有限公司",
+            "net_profit": 507.45,
+            "revenue": 3620.13
+          },
+          {
+            "year": 2024,
+            "operating_cashflow": 1334.54,
+            "company": "比亚迪股份有限公司",
+            "net_profit": 402.54,
+            "revenue": 7771.02
+          }
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.548
+    },
+    {
+      "id": "security_insert",
+      "category": "sql_security",
+      "scenario": "",
+      "expected": {
+        "blocked": true
+      },
+      "actual": {
+        "blocked": true,
+        "executable": null
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.026
+    },
+    {
+      "id": "security_update",
+      "category": "sql_security",
+      "scenario": "",
+      "expected": {
+        "blocked": true
+      },
+      "actual": {
+        "blocked": true,
+        "executable": null
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.015
+    },
+    {
+      "id": "security_delete",
+      "category": "sql_security",
+      "scenario": "",
+      "expected": {
+        "blocked": true
+      },
+      "actual": {
+        "blocked": true,
+        "executable": null
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.012
+    },
+    {
+      "id": "security_drop",
+      "category": "sql_security",
+      "scenario": "",
+      "expected": {
+        "blocked": true
+      },
+      "actual": {
+        "blocked": true,
+        "executable": null
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.009
+    },
+    {
+      "id": "security_pragma",
+      "category": "sql_security",
+      "scenario": "",
+      "expected": {
+        "blocked": true
+      },
+      "actual": {
+        "blocked": true,
+        "executable": null
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.01
+    },
+    {
+      "id": "security_attach",
+      "category": "sql_security",
+      "scenario": "",
+      "expected": {
+        "blocked": true
+      },
+      "actual": {
+        "blocked": true,
+        "executable": null
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.011
+    },
+    {
+      "id": "security_multi_statement",
+      "category": "sql_security",
+      "scenario": "",
+      "expected": {
+        "blocked": true
+      },
+      "actual": {
+        "blocked": true,
+        "executable": null
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.014
+    },
+    {
+      "id": "security_system_table",
+      "category": "sql_security",
+      "scenario": "",
+      "expected": {
+        "blocked": true
+      },
+      "actual": {
+        "blocked": true,
+        "executable": null
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.011
+    },
+    {
+      "id": "security_legal_select",
+      "category": "sql_security",
+      "scenario": "",
+      "expected": {
+        "blocked": false
+      },
+      "actual": {
+        "blocked": false,
+        "executable": true
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 1.093
+    },
+    {
+      "id": "rag_research_page",
+      "category": "rag_citation",
+      "scenario": "年报如何描述研发投入？",
+      "expected": {
+        "status": "success",
+        "first_page": 1
+      },
+      "actual": {
+        "status": "success",
+        "pages": [
+          1
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 14.937
+    },
+    {
+      "id": "rag_overseas_page",
+      "category": "rag_citation",
+      "scenario": "海外市场有哪些汇率和政策风险？",
+      "expected": {
+        "status": "success",
+        "first_page": 2
+      },
+      "actual": {
+        "status": "success",
+        "pages": [
+          2,
+          5
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 15.145
+    },
+    {
+      "id": "rag_profit_reason_page",
+      "category": "rag_citation",
+      "scenario": "为什么净利润变化？主要原因是什么？",
+      "expected": {
+        "status": "success",
+        "first_page": 5,
+        "excluded_pages": [
+          3,
+          4
+        ]
+      },
+      "actual": {
+        "status": "success",
+        "pages": [
+          5
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.693
+    },
+    {
+      "id": "rag_unrelated",
+      "category": "rag_citation",
+      "scenario": "员工食堂本周菜谱是什么？",
+      "expected": {
+        "status": "no_evidence"
+      },
+      "actual": {
+        "status": "no_evidence",
+        "pages": []
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.354
+    },
+    {
+      "id": "rag_numeric_without_reason",
+      "category": "rag_citation",
+      "scenario": "为什么净利润变化？主要原因是什么？",
+      "expected": {
+        "status": "no_evidence"
+      },
+      "actual": {
+        "status": "no_evidence",
+        "pages": []
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 18.793
+    },
+    {
+      "id": "integrity_unknown_company",
+      "category": "query_integrity",
+      "scenario": "贵州茅台2024年营收多少",
+      "expected": {
+        "status": "unknown_company",
+        "sql_status": "not_applicable"
+      },
+      "actual": {
+        "status": "unknown_company",
+        "sql_status": "not_applicable"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 34.192
+    },
+    {
+      "id": "integrity_half_year",
+      "category": "query_integrity",
+      "scenario": "比亚迪2024年上半年营收多少",
+      "expected": {
+        "status": "unsupported_period",
+        "sql_status": "not_applicable"
+      },
+      "actual": {
+        "status": "unsupported_period",
+        "sql_status": "not_applicable"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 31.954
+    },
+    {
+      "id": "integrity_missing_risk_year",
+      "category": "query_integrity",
+      "scenario": "比亚迪2099年有哪些风险",
+      "expected": {
+        "status": "missing_scope",
+        "sql_status": "not_applicable"
+      },
+      "actual": {
+        "status": "missing_scope",
+        "sql_status": "not_applicable"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 36.776
+    },
+    {
+      "id": "integrity_missing_report_year",
+      "category": "query_integrity",
+      "scenario": "比亚迪2099年生成分析报告",
+      "expected": {
+        "status": "missing_scope",
+        "sql_status": "not_applicable"
+      },
+      "actual": {
+        "status": "missing_scope",
+        "sql_status": "not_applicable"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 40.329
+    },
+    {
+      "id": "integrity_year_range",
+      "category": "query_integrity",
+      "scenario": "比亚迪2023年至2025年营业收入分别是多少",
+      "expected": {
+        "status": "success",
+        "sql_status": "success",
+        "years": [
+          2023,
+          2024,
+          2025
+        ],
+        "row_count": 3,
+        "all_values_answered": true
+      },
+      "actual": {
+        "status": "success",
+        "sql_status": "success",
+        "years": [
+          2023,
+          2024,
+          2025
+        ],
+        "row_count": 3,
+        "all_values_answered": true
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 52.919
+    },
+    {
+      "id": "integrity_multi_company",
+      "category": "query_integrity",
+      "scenario": "比亚迪和宁德时代2023年和2024年营业收入分别是多少",
+      "expected": {
+        "status": "success",
+        "sql_status": "success",
+        "years": [
+          2023,
+          2024
+        ],
+        "companies": [
+          "宁德时代新能源科技股份有限公司",
+          "比亚迪股份有限公司"
+        ],
+        "row_count": 4,
+        "all_values_answered": true
+      },
+      "actual": {
+        "status": "success",
+        "sql_status": "success",
+        "years": [
+          2023,
+          2024
+        ],
+        "companies": [
+          "宁德时代新能源科技股份有限公司",
+          "比亚迪股份有限公司"
+        ],
+        "row_count": 4,
+        "all_values_answered": true
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 63.643
+    },
+    {
+      "id": "integrity_real_trace",
+      "category": "query_integrity",
+      "scenario": "仅营收查询的真实执行记录",
+      "expected": {
+        "sql_executed": true,
+        "actual_durations": true,
+        "rag_executed": false,
+        "static_called_label": false
+      },
+      "actual": {
+        "sql_executed": true,
+        "actual_durations": true,
+        "rag_executed": false,
+        "static_called_label": false
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 60.687
+    },
+    {
+      "id": "integrity_growth_complete",
+      "category": "analysis_integrity",
+      "scenario": "100→120→144：年度同比、区间增长与年化区分",
+      "expected": {
+        "yoy": 20.0,
+        "interval_growth": 44.0,
+        "cagr": 20.0,
+        "missing_years": []
+      },
+      "actual": {
+        "yoy": 20.0,
+        "interval_growth": 44.0,
+        "cagr": 20.0,
+        "missing_years": []
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 4.253
+    },
+    {
+      "id": "integrity_growth_gap",
+      "category": "analysis_integrity",
+      "scenario": "缺少2024年时禁止跨年当同比",
+      "expected": {
+        "yoy": null,
+        "interval_growth": 44.0,
+        "cagr": 20.0,
+        "missing_years": [
+          2024
+        ]
+      },
+      "actual": {
+        "yoy": null,
+        "interval_growth": 44.0,
+        "cagr": 20.0,
+        "missing_years": [
+          2024
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 4.668
+    },
+    {
+      "id": "integrity_incomplete_score",
+      "category": "analysis_integrity",
+      "scenario": "仅营业收入时不得默认综合评分",
+      "expected": {
+        "available": false,
+        "score": null,
+        "has_missing_reason": true
+      },
+      "actual": {
+        "available": false,
+        "score": null,
+        "has_missing_reason": true
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 5.407
+    },
+    {
+      "id": "integrity_single_metric_compare",
+      "category": "analysis_integrity",
+      "scenario": "单指标比较不产生综合倾向",
+      "expected": {
+        "score_a": null,
+        "score_b": null,
+        "recommended": null,
+        "rows": 1
+      },
+      "actual": {
+        "score_a": null,
+        "score_b": null,
+        "recommended": null,
+        "rows": 1
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 4.758
+    },
+    {
+      "id": "integrity_empty_risk",
+      "category": "analysis_integrity",
+      "scenario": "空数值不得显示低风险",
+      "expected": {
+        "unknown": true,
+        "green": false,
+        "coverage_complete": false
+      },
+      "actual": {
+        "unknown": true,
+        "green": false,
+        "coverage_complete": false
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 8.713
+    },
+    {
+      "id": "integrity_cloud_changed_value",
+      "category": "cloud_facts",
+      "scenario": "云端改写数字被程序拒绝",
+      "expected": {
+        "valid": false
+      },
+      "actual": {
+        "valid": false
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.011
+    },
+    {
+      "id": "integrity_cloud_changed_scope",
+      "category": "cloud_facts",
+      "scenario": "云端改写企业和年份被程序拒绝",
+      "expected": {
+        "valid": false
+      },
+      "actual": {
+        "valid": false
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 0.004
+    },
+    {
+      "id": "integrity_csv_yuan",
+      "category": "data_integrity",
+      "scenario": "元换算为亿元后预览",
+      "expected": {
+        "can_commit": true,
+        "values": [
+          100.0
+        ]
+      },
+      "actual": {
+        "can_commit": true,
+        "values": [
+          100.0
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 3.732
+    },
+    {
+      "id": "integrity_csv_multi_company",
+      "category": "data_integrity",
+      "scenario": "表格多企业不归入首家公司",
+      "expected": {
+        "can_commit": true,
+        "values": [
+          100.0,
+          200.0
+        ],
+        "companies": [
+          "乙企业",
+          "甲企业"
+        ]
+      },
+      "actual": {
+        "can_commit": true,
+        "values": [
+          100.0,
+          200.0
+        ],
+        "companies": [
+          "乙企业",
+          "甲企业"
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 1.531
+    },
+    {
+      "id": "integrity_csv_unknown_unit",
+      "category": "data_integrity",
+      "scenario": "无单位金额禁止确认入库",
+      "expected": {
+        "can_commit": false
+      },
+      "actual": {
+        "can_commit": false
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 1.274
+    },
+    {
+      "id": "integrity_csv_ratio",
+      "category": "data_integrity",
+      "scenario": "比例0.12规范化为12%",
+      "expected": {
+        "can_commit": true,
+        "values": [
+          12.0
+        ]
+      },
+      "actual": {
+        "can_commit": true,
+        "values": [
+          12.0
+        ]
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 1.24
+    },
+    {
+      "id": "integrity_pdf_distinct_rows",
+      "category": "data_integrity",
+      "scenario": "真实生成PDF：营收100、利润10、现金流20和无保留意见",
+      "expected": {
+        "can_commit": true,
+        "revenue": 100.0,
+        "net_profit": 10.0,
+        "operating_cashflow": 20.0,
+        "audit_opinion": "标准无保留意见"
+      },
+      "actual": {
+        "can_commit": true,
+        "revenue": 100.0,
+        "net_profit": 10.0,
+        "operating_cashflow": 20.0,
+        "audit_opinion": "标准无保留意见"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 66.207
+    },
+    {
+      "id": "integrity_rag_wrong_year",
+      "category": "query_integrity",
+      "scenario": "2024问题不得引用仅有的2023报告",
+      "expected": {
+        "status": "no_evidence",
+        "candidate_documents": 0,
+        "citations": 0
+      },
+      "actual": {
+        "status": "no_evidence",
+        "candidate_documents": 0,
+        "citations": 0
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 2.969
+    },
+    {
+      "id": "integrity_seed_preserves_import",
+      "category": "data_integrity",
+      "scenario": "修改内置同公司同年度后重跑种子数据",
+      "expected": {
+        "revenue": 123.45,
+        "file_name": "user.csv",
+        "import_id": "user-v1"
+      },
+      "actual": {
+        "revenue": 123.45,
+        "file_name": "user.csv",
+        "import_id": "user-v1"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 68.573
+    },
+    {
+      "id": "integrity_metric_provenance",
+      "category": "data_integrity",
+      "scenario": "仅更新利润不改变营收来源，保留旧版本",
+      "expected": {
+        "revenue_file": "original.csv",
+        "profit_file": "profit.pdf",
+        "profit_page": 5,
+        "history_count": 3
+      },
+      "actual": {
+        "revenue_file": "original.csv",
+        "profit_file": "profit.pdf",
+        "profit_page": 5,
+        "history_count": 3
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 37.446
+    },
+    {
+      "id": "integrity_preview_before_write",
+      "category": "data_integrity",
+      "scenario": "预览和确认入库之间不得写库",
+      "expected": {
+        "before_confirmation_count": 0,
+        "denied": true,
+        "accepted": true,
+        "after_confirmation_count": 1
+      },
+      "actual": {
+        "before_confirmation_count": 0,
+        "denied": true,
+        "accepted": true,
+        "after_confirmation_count": 1
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 33.463
+    },
+    {
+      "id": "integrity_readonly_demo",
+      "category": "data_integrity",
+      "scenario": "只读演示库拒绝写入",
+      "expected": {
+        "blocked": true,
+        "count": 0
+      },
+      "actual": {
+        "blocked": true,
+        "count": 0
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 37.858
+    },
+    {
+      "id": "integrity_official_pdf_values",
+      "category": "data_integrity",
+      "scenario": "比亚迪2024年官方年报第10—11页原文摘页：三项指标与元单位换算",
+      "expected": {
+        "can_commit": true,
+        "revenue": 7771.02455,
+        "net_profit": 402.54346,
+        "operating_cashflow": 1334.53873,
+        "original_unit": "元"
+      },
+      "actual": {
+        "can_commit": true,
+        "revenue": 7771.02455,
+        "net_profit": 402.54346,
+        "operating_cashflow": 1334.53873,
+        "original_unit": "元"
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 273.625
+    },
+    {
+      "id": "integrity_official_numeric_citation",
+      "category": "query_integrity",
+      "scenario": "官方年报年度净利润引用须包含40,254,346,000.00元，不能改引季度表",
+      "expected": {
+        "status": "success",
+        "pages": [
+          2
+        ],
+        "supports_annual_value": true,
+        "fact_checked": true
+      },
+      "actual": {
+        "status": "success",
+        "pages": [
+          2
+        ],
+        "supports_annual_value": true,
+        "fact_checked": true
+      },
+      "passed": true,
+      "error": null,
+      "duration_ms": 20.216
+    }
+  ],
+  "disclaimer": "该结果仅代表内置回归用例及固定官方年报摘页的执行结果，不代表任意PDF、全量财报或生产数据的泛化准确率。"
+}

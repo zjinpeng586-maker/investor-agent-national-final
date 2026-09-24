@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from functools import lru_cache
 import pandas as pd
 
-from core.db import fetch_companies, upsert_company, upsert_metric, insert_report_file, fetch_report_files
+from core.db import get_conn, upsert_company, upsert_metric, insert_report_file, fetch_report_files, atomic_write, METRIC_UNITS
+from core.storage import internal_writes
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def seed_sample_data() -> None:
+@lru_cache(maxsize=1)
+def _sample_files():
     """Load built-in sample companies into the local SQLite database.
 
     The expanded sample dataset covers 10 listed companies across the new-energy
@@ -28,12 +31,36 @@ def seed_sample_data() -> None:
         ('惠州亿纬锂能股份有限公司', '300014', '新能源产业链（锂电池制造）', ROOT / 'data' / 'sample_eve.csv'),
         ('浙江华友钴业股份有限公司', '603799', '新能源产业链（钴锂材料）', ROOT / 'data' / 'sample_huayou.csv'),
     ]
-    for name, code, industry, path in sample_files:
-        cid = upsert_company(name, stock_code=code, industry=industry, source='builtin')
-        df = pd.read_csv(path)
-        for _, row in df.iterrows():
-            upsert_metric(cid, row.to_dict())
-        existing_reports = [r['file_name'] for r in fetch_report_files(cid)]
-        report_name = path.name
-        if report_name not in existing_reports:
-            insert_report_file(cid, report_name, None, 'builtin', str(path), 'success', '系统内置新能源产业链扩展演示数据')
+    return [(name, code, industry, path, pd.read_csv(path).to_dict('records')) for name, code, industry, path in sample_files]
+
+
+def seed_sample_data(*, force: bool = False) -> None:
+    """Fill missing built-in values in the active library without replacing user values."""
+    samples = _sample_files()
+    conn = get_conn()
+    existing = {(r['stock_code'] or r['name'], r['year']): dict(r) for r in conn.execute(
+        'SELECT c.name,c.stock_code,f.* FROM companies c JOIN financial_metrics f ON f.company_id=c.id')}
+    conn.close()
+    def missing_values(name, code, row):
+        prior = existing.get((code or name, int(row['year'])), {})
+        return any(key in row and pd.notna(row[key]) and prior.get(key) is None for key in METRIC_UNITS)
+    if not any(missing_values(name, code, row) for name, code, _, _, rows in samples for row in rows):
+        return
+    with internal_writes(), atomic_write():
+        for name, code, industry, path, rows in samples:
+            missing = [(index, row) for index, row in enumerate(rows) if missing_values(name, code, row)]
+            if not missing:
+                continue
+            cid = upsert_company(name, stock_code=code, industry=industry, source='builtin')
+            for index, row in missing:
+                record = dict(row)
+                record['_provenance'] = {key: {
+                    'file_name': path.name, 'file_path': str(path), 'cell': f'第{index + 2}行 / {key}',
+                    'raw_value': row[key], 'raw_unit': unit, 'normalized_unit': unit,
+                    'import_id': 'builtin-v1', 'source_note': '系统内置数据，来源为随应用提供的指标文件',
+                } for key, unit in METRIC_UNITS.items() if key in row and pd.notna(row[key])}
+                upsert_metric(cid, record, only_missing=True)
+            if path.name not in [r['file_name'] for r in fetch_report_files(cid)]:
+                insert_report_file(cid, path.name, None, 'builtin', str(path), 'success', '系统内置数据',
+                    source_type='builtin', report_title=path.name, import_id='builtin-v1', ingest_status='imported',
+                    metric_count=sum(pd.notna(row.get(key)) for row in rows for key in METRIC_UNITS))

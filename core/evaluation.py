@@ -17,6 +17,8 @@ from core.planner import plan_query
 from core.retrieval import retrieve_documents
 from core.seed import seed_sample_data
 from core.text_to_sql import execute_readonly_sql, run_text_to_sql, validate_sql
+from core.storage import workspace_context
+from core.integrity_benchmark import execute_integrity_case
 
 
 SUITE_PATH = ROOT / 'data' / 'evaluation' / 'benchmark_v1.json'
@@ -27,6 +29,8 @@ CATEGORY_LABELS = {
     'conversation': '多轮上下文', 'planner': 'Planner 路由',
     'text_to_sql': 'Text-to-SQL 结果正确性', 'sql_security': 'SQL 安全',
     'rag_citation': 'RAG 页码与证据',
+    'query_integrity': '企业与报告期约束', 'data_integrity': '导入与逐指标来源',
+    'analysis_integrity': '增长率与缺失数据', 'cloud_facts': '云端事实保护',
 }
 
 
@@ -70,6 +74,9 @@ def _rag_reports(root: Path) -> dict[str, list[dict[str, Any]]]:
 
 def _evaluate_case(case: dict[str, Any], rag_root: Path, rag_reports: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     category, expected = case['category'], case['expected']
+    if category in {'query_integrity', 'data_integrity', 'analysis_integrity', 'cloud_facts'}:
+        actual = execute_integrity_case(case, rag_root)
+        return {'actual': actual, 'passed': actual == expected}
     if category == 'conversation':
         context = new_conversation_context()
         result = None
@@ -135,13 +142,13 @@ def summarize_results(cases: list[dict[str, Any]]) -> dict[str, Any]:
 
 def run_benchmark(suite: dict[str, Any] | None = None) -> dict[str, Any]:
     suite = suite or load_benchmark_suite()
-    init_db()
-    seed_sample_data()
     started_at = datetime.now(timezone.utc).isoformat()
     overall_start = time.perf_counter()
     results = []
-    with tempfile.TemporaryDirectory(prefix='financial-benchmark-') as temp_dir:
+    with tempfile.TemporaryDirectory(prefix='financial-benchmark-') as temp_dir, workspace_context('evaluation', Path(temp_dir) / 'database', allow_writes=True):
         root = Path(temp_dir)
+        init_db()
+        seed_sample_data()
         reports = _rag_reports(root)
         for case in suite.get('cases', []):
             case_start = time.perf_counter()
@@ -153,6 +160,8 @@ def run_benchmark(suite: dict[str, Any] | None = None) -> dict[str, Any]:
             try:
                 evaluated = _evaluate_case(case, root, reports)
                 result.update(evaluated)
+                if not result['passed'] and not result.get('error'):
+                    result['error'] = '实际执行结果与独立预期不一致；请查看 expected / actual。'
             except Exception as exc:
                 result['error'] = f'{type(exc).__name__}: {exc}'
             result['duration_ms'] = round((time.perf_counter() - case_start) * 1000, 3)
@@ -161,7 +170,8 @@ def run_benchmark(suite: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         'suite_id': suite.get('suite_id'), 'suite_version': suite.get('version'),
         'description': suite.get('description'), 'started_at': started_at,
+        'data_scope': '独立临时评测库，不读写统一资料库',
         'duration_ms': round((time.perf_counter() - overall_start) * 1000, 3),
         **summary, 'cases': results,
-        'disclaimer': '该结果仅代表内置确定性回归 Benchmark，不代表外部真实生产数据集泛化能力。',
+        'disclaimer': '该结果仅代表内置回归用例及固定官方年报摘页的执行结果，不代表任意PDF、全量财报或生产数据的泛化准确率。',
     }

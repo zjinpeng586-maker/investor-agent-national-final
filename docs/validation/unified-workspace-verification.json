@@ -1,0 +1,64 @@
+{
+  "revision": "2026-09-24-unified-workspace-v1",
+  "schema_version": 3,
+  "compileall": {
+    "command": "python -m compileall -q app core scripts tests",
+    "exit_code": 0
+  },
+  "pytest": {
+    "command": "pytest -q",
+    "passed": 409,
+    "failed": 0,
+    "elapsed_sec": 111.73,
+    "exit_code": 0
+  },
+  "browser": {
+    "passed": true,
+    "checks": [
+      "single business library; no workspace selector/footer",
+      "real structured query and annual follow-up",
+      "database-backed ingested records with source and status",
+      "research library available",
+      "evaluation page available without changing library",
+      "enterprise analysis and actual PDF download"
+    ]
+  },
+  "current_database": {
+    "passed": true,
+    "verified_metric_values": 237,
+    "counts": {
+      "companies": 10,
+      "financial_metrics": 30,
+      "metric_sources": 237,
+      "report_files": 10
+    },
+    "legacy_data_preserved": true,
+    "integrity_check": "ok",
+    "foreign_key_check": "passed",
+    "migration_marker": "done"
+  },
+  "migration_rehearsal": {
+    "passed": true,
+    "verified_legacy_metric_values": 237,
+    "counts": {
+      "companies": 10,
+      "financial_metrics": 30,
+      "metric_sources": 237,
+      "report_files": 10
+    },
+    "repeated_initialization_counts_unchanged": true,
+    "legacy_snapshots_unchanged": true,
+    "foreign_key_check": "passed",
+    "missing_files": [],
+    "test_scope": "Copy of local legacy database snapshots"
+  },
+  "online_tests": "mocked; no live exchange requests",
+  "legacy_search": "Only compatibility migration, migration documentation and dedicated legacy-session tests matched.",
+  "dependency_versions_changed": false,
+  "five_business_pages_preserved": true,
+  "public_readonly_preserved": true,
+  "platform_limits": [
+    "macOS not tested on hardware",
+    "cloud deployment and live exchange availability not validated"
+  ]
+}

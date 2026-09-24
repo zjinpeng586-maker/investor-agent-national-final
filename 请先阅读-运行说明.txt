@@ -1,24 +1,8 @@
-财报智问 V2.0
+财报智问可靠性修订版
 
-Windows 运行方式：
-1. 解压项目压缩包。
-2. 双击 run_streamlit.bat。
-3. 浏览器打开本地系统页面。
+Windows：首次 install_windows.bat；以后 run_streamlit.bat。
+macOS：首次 bash install_mac.sh；以后 bash run_streamlit_mac.sh。
+需要 Python 3.11，日常启动不安装依赖。
 
-macOS 运行方式：
-1. 解压项目压缩包。
-2. 打开“终端”，进入项目目录，例如：
-   cd ~/Downloads/investor_agent_national_final
-3. 推荐使用虚拟环境：
-   python3 -m venv .venv
-   source .venv/bin/activate
-   python -m pip install --upgrade pip
-   pip install -r requirements.txt
-   streamlit run app/main.py
-4. 也可以使用启动脚本：
-   chmod +x run_streamlit_mac.sh
-   ./run_streamlit_mac.sh
-
-浏览器访问地址通常为：http://localhost:8501
-
-推荐先使用“本地分析模式”进行演示；如需展示云端语言增强能力，可切换到“云端增强模式”，并填写模型服务商与 API Key。
+请阅读 README.md、docs/Windows本地运行说明.md 和 docs/macOS本地运行说明.md。
+数据使用独立持久目录；个人库需先预览确认再导入。备份/旧库迁移步骤以最新说明为准。
