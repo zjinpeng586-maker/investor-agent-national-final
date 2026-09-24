@@ -1,7 +1,7 @@
 {
-  "version": "财报智问_星月UI归因树版_20260925_封板版",
+  "version": "财报智问_星月UI归因树版_20260925_在线披露增强版",
   "pdf_layout_revision": "2026-09-24-branding-wrapped-tables-v3",
-  "revision": "2026-09-25-attribution-query-review",
+  "revision": "2026-09-25-public-session-import",
   "schema_version": 3,
   "files": [
     {
@@ -26,8 +26,8 @@
     },
     {
       "file": "README.md",
-      "sha256": "436b30da773cb4c04cb917b4ded3b82a45639d7298687f8fe2c1b4d46817013a",
-      "size": 20409
+      "sha256": "a05462fc5b6ee92a7fb63882a556df0379098c03e727ea3ee55cca8c9bf9d4e1",
+      "size": 21424
     },
     {
       "file": "app/assets/brand/qingmeng-shuzhi-logo.png",
@@ -46,8 +46,8 @@
     },
     {
       "file": "app/main.py",
-      "sha256": "900e90b3d7210e608427ea97b89dd2709cc2ddbf8d3e13d3da9b8cce0af7288f",
-      "size": 69068
+      "sha256": "2aea5901e4a14c4ae1823cecb12e81a5397d9377a6c42ef01f4c2681693d9c6e",
+      "size": 70258
     },
     {
       "file": "app/messages.py",
@@ -96,13 +96,13 @@
     },
     {
       "file": "core/conversation.py",
-      "sha256": "3cdc3e819513e792889c7fe12c701a59bdf4e26dd9fc1b6309be2ef285179622",
-      "size": 13714
+      "sha256": "790f46b3949bcf6458608392654d7fe7da246e08f96617838b7a28b7c73a97d7",
+      "size": 13678
     },
     {
       "file": "core/db.py",
-      "sha256": "7af61005577076b566e68a2d4997810252a79b2040f28bc0bf297519d9226a64",
-      "size": 24953
+      "sha256": "cc1abab2f91db0bde9b1be878f298ee1ed30743e0caa14858bd5c90018ae3984",
+      "size": 25073
     },
     {
       "file": "core/downloads.py",
@@ -146,8 +146,8 @@
     },
     {
       "file": "core/qa_engine.py",
-      "sha256": "098ed295266e95d9e3ef5bcbd4fdd3bd76562edd50a06c02e3daf969de7817d8",
-      "size": 36059
+      "sha256": "5a49af3c8c85e1f1ebc4fbddab6e385a8c18e63b49ba2cf7fd7e5759342f7fe1",
+      "size": 36412
     },
     {
       "file": "core/report_pdf.py",
@@ -166,13 +166,13 @@
     },
     {
       "file": "core/service.py",
-      "sha256": "eb83beccd8227bb166673e20ea79be9cb607b685c3a76cc4b72275d3ff8113ae",
-      "size": 27722
+      "sha256": "adc51d2fb2f7204acde056c60a1398b70d0d5a8afaf4cb23f3994fd5cc135392",
+      "size": 27850
     },
     {
       "file": "core/storage.py",
-      "sha256": "5dd04472dbe9cc3702cce0fbd5a68a5f500912de2a47f4ff438b2ecf08b9a942",
-      "size": 3922
+      "sha256": "abc3bfb14bf4668fd08ec57c2eb688eaf780fbceb0fa5b41566151058f4182f8",
+      "size": 5623
     },
     {
       "file": "core/text_to_sql.py",
@@ -345,19 +345,24 @@
       "size": 5300
     },
     {
+      "file": "docs/在线披露增强验收.md",
+      "sha256": "27959d2d7586fcc8db83ca66963a1514cb7fafa846165ccd533b32fdd70cb887",
+      "size": 3986
+    },
+    {
       "file": "docs/归因树功能与验收.md",
       "sha256": "568d3beed47a6cde018de327648088bc26f297d35b1591cd1f99b6f27da79ef8",
       "size": 7766
     },
     {
       "file": "docs/技术说明书.md",
-      "sha256": "fd1f257e8e023b88b99fc975ab69e8a95893b38e605a831da1675307e440c288",
-      "size": 9539
+      "sha256": "99e6f2b5ff3c81e03797230e4bb010cebe21aca9f5652ecec9be05c3a11c556b",
+      "size": 9747
     },
     {
       "file": "docs/统一资料库与公开披露说明.md",
-      "sha256": "3d054493b29fd42fdfae62e21614917ffcd6b7f14a6b6f53ed14bb394280a5f0",
-      "size": 6512
+      "sha256": "6959f6fd85eb6a02c5f5d26d9bb324995bcc6b6dd66af63911c91567c88f359d",
+      "size": 6709
     },
     {
       "file": "docs/统一资料库改造验收.md",
@@ -386,8 +391,8 @@
     },
     {
       "file": "run_local_network.bat",
-      "sha256": "67bf068c5d8df601488a94913a99291ec4a00e6a755a59ab01993564885e102f",
-      "size": 583
+      "sha256": "7a3a72d2558b64c7820bf0c49d71f91c4154220049241e5427449141595dc281",
+      "size": 585
     },
     {
       "file": "run_streamlit.bat",
@@ -545,6 +550,11 @@
       "size": 7444
     },
     {
+      "file": "tests/test_public_session.py",
+      "sha256": "5b6f699d472258f7b8d3a97ca570b4dd840f8f884d2795573ddbf5cf02ef3bf1",
+      "size": 6180
+    },
+    {
       "file": "tests/test_query_integrity.py",
       "sha256": "49e6373e97dc23fc9d3dc5f2b639cbab256acc03a5f812dc5642303fac61dfc0",
       "size": 21850
@@ -556,8 +566,8 @@
     },
     {
       "file": "tests/test_reliability_ui.py",
-      "sha256": "60c7897cd12988316fcacb8500361db0d34695d2edfa0bead21d7fdca20bdad9",
-      "size": 11497
+      "sha256": "677b65ee716a086c8a0a443dd2bfe454cf5a7008d45b4720541cd248289176a6",
+      "size": 11693
     },
     {
       "file": "tests/test_report_pdf_layout.py",
@@ -566,8 +576,8 @@
     },
     {
       "file": "tests/test_retrieval.py",
-      "sha256": "b5746e89fff24e92f43ce39cc5ac9cfaefe548b599ff337af3e025e3de64c0ed",
-      "size": 14563
+      "sha256": "02d5d2941e1330fcf65bfed32baf56f39f7b89505eb67f7967020d646a5c074b",
+      "size": 14708
     },
     {
       "file": "tests/test_source_viewer.py",

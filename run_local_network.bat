@@ -7,7 +7,7 @@ if not exist ".venv\Scripts\python.exe" (
     pause
     exit /b 1
 )
-set "FINANCIAL_DEPLOYMENT=public"
+set "FINANCIAL_DEPLOYMENT=readonly"
 set "FINANCIAL_WORKSPACE=main"
 if not defined FINANCIAL_DATA_DIR set "FINANCIAL_DATA_DIR=%LOCALAPPDATA%\FinancialReportQA\data"
 echo 正在启动局域网只读模式；上传、修改、删除入口关闭。

@@ -56,7 +56,7 @@ from core.seed import seed_sample_data
 from core.service import ingest_online_pdf_bytes, ingest_online_pdf_url, ingest_pdf_file, ingest_tabular_file
 from core.service import prepare_import, commit_import
 from core.online_disclosure import download_pdf
-from core.storage import configure_workspace, is_public_deployment, can_write
+from core.storage import configure_workspace, configure_public_session, public_session_enabled, is_public_deployment, can_write
 
 
 PAGES = ['财报问数', '企业分析', '研究资料库', '数据中心', '评测中心']
@@ -545,7 +545,7 @@ def render_qa_page(selected_main, selected_cmp, all_names, data_map, name_to_id,
             question = st.text_area('自然语言问题', placeholder='例如：这家公司近三年营收变化如何？',
                                     height=100, max_chars=5000, key='qa_input', label_visibility='collapsed')
             note, submit = st.columns([5, 1.25], vertical_alignment='bottom')
-            note.markdown('<div class="fu-composer-note">支持营收、利润、现金流与风险查询，以及连续问答</div>', unsafe_allow_html=True)
+            note.markdown('<div class="fu-composer-note">支持七项核心财务指标总览、趋势、风险和连续问答；新入库资料即时参与分析</div>', unsafe_allow_html=True)
             with submit:
                 submitted = st.form_submit_button('开始分析', type='primary', width='stretch')
         if submitted:
@@ -558,6 +558,12 @@ def render_qa_page(selected_main, selected_cmp, all_names, data_map, name_to_id,
             run_question(pending, selected_main, selected_cmp, selected_period, all_names, data_map, llm_config)
         st.rerun()
     st.markdown('<p class="fu-footnote">回答依据已接入数据与来源，支持连续问答和原文核验。</p>', unsafe_allow_html=True)
+    with st.expander('无需云端模型的问答示例'):
+        st.write('查询总览：比亚迪2024年核心财务指标是多少？')
+        st.write('连续追问：那2023年呢？')
+        st.write('指标别称：比亚迪2024年净资产回报率、每股盈利是多少？')
+        st.write('趋势与归因：比亚迪2024年净利润为什么变化？')
+        st.caption('可将企业替换为新入库企业或其股票代码。缺少的指标不会补造；报告解释仍需真实原文。')
 
 
 
@@ -849,6 +855,8 @@ def render_data_center(companies, name_to_id, data_map):
     writable = can_write()
     if not writable:
         st.info('当前部署为只读模式，无法执行数据导入或删除操作。')
+    elif is_public_deployment():
+        st.info('在线会话资料库：支持公开披露检索、下载复核和真实入库。导入后可在财报问数、企业分析中使用，仅当前浏览器会话可见。刷新、断开连接或服务重启后不保证保留，请自行保存原始文件。本会话限20个文件、合计100 MB。')
     tab_upload, tab_online, tab_sources = st.tabs(['本地文件接入', '公开披露接入', '数据资产与来源'], key='data_center_tabs', on_change='rerun')
     with tab_upload:
         if writable:
@@ -1037,6 +1045,10 @@ def main():
     st.set_page_config(page_title=PAGE_TITLE, page_icon=page_icon(), layout='wide', initial_sidebar_state='auto')
     init_state()
     configure_workspace('main')
+    if public_session_enabled():
+        if '_public_database_session' not in st.session_state:
+            st.session_state['_public_database_session'] = uuid4().hex
+        configure_public_session(st.session_state['_public_database_session'])
     init_db()
     seed_sample_data()
     apply_styles()

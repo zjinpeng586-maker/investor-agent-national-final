@@ -80,16 +80,19 @@ def _submit(app, question):
     return app.session_state.chat_messages[-1]['result']
 
 
-def test_public_default_has_no_upload_delete_or_commit_controls(public_environment):
+def test_public_default_import_controls_use_an_isolated_session(public_environment):
     app = _app()
     assert [widget.key for widget in app.radio] == ['navigation']
     app.radio(key='navigation').set_value('数据中心').run()
     assert not app.exception
-    assert '当前部署为只读模式，无法执行数据导入或删除操作。' in _text(app)
-    assert not app.get('file_uploader')
-    assert not any('删除' in button.label or '确认入库' in button.label for button in app.button)
-    assert not any(button.key in ('prepare_upload', 'prepare_pdf_url', 'prepare_disclosure') for button in app.button)
-    assert _rows(public_environment)
+    assert '在线会话资料库' in _text(app)
+    assert app.get('file_uploader')
+    assert any(button.key == 'prepare_pdf_url' for button in app.button)
+    session = app.session_state['_public_database_session']
+    assert (public_environment / 'sessions' / session / 'investor_agent.db').exists()
+    assert not (public_environment / 'main/investor_agent.db').exists()
+    app.run()
+    assert app.session_state['_public_database_session'] == session
 
 
 def test_public_mode_cannot_select_internal_evaluation_database(public_environment, monkeypatch):
@@ -97,8 +100,10 @@ def test_public_mode_cannot_select_internal_evaluation_database(public_environme
     app = _app()
     app.radio(key='navigation').set_value('数据中心').run()
     assert not app.exception
-    assert not app.get('file_uploader')
-    assert (public_environment / 'main/investor_agent.db').exists()
+    assert app.get('file_uploader')
+    session = app.session_state['_public_database_session']
+    assert (public_environment / 'sessions' / session / 'investor_agent.db').exists()
+    assert not (public_environment / 'main/investor_agent.db').exists()
     assert not (public_environment / 'evaluation/investor_agent.db').exists()
 
 

@@ -288,7 +288,9 @@ def test_multi_company_hybrid_ui_shows_effective_and_original_intents(rag_docume
     assert any(set(table['企业']) == {BYD, CATL} for table in comparison_tables)
 
 
-def test_phase4_ui_citations_process_library_and_evaluation(rag_document):
+def test_phase4_ui_citations_process_library_and_evaluation(rag_document, monkeypatch):
+    # This fixture is in the local library; public visitors cannot read it.
+    monkeypatch.setenv('FINANCIAL_DEPLOYMENT', 'local')
     app = AppTest.from_file(APP_PATH, default_timeout=30).run()
     app.text_area[0].set_value('比亚迪2024年年报如何描述研发投入？')
     next(button for button in app.button if button.label == '开始分析').click().run()

@@ -30,11 +30,11 @@ from core.attribution import build_net_profit_attribution
 KEYWORDS = {
     'revenue': ['营业收入', '营收', '收入', 'revenue'],
     'net_profit': ['归母净利润', '净利润', '利润', 'net profit'],
-    'operating_cashflow': ['经营现金流', '现金流', '经营活动现金流'],
-    'roe': ['roe', '净资产收益率'],
+    'operating_cashflow': ['经营现金流', '现金流', '经营活动现金流', '经营净现金'],
+    'roe': ['roe', '净资产收益率', '净资产回报率'],
     'debt_ratio': ['资产负债率', '负债率', '杠杆'],
     'gross_margin': ['毛利率'],
-    'eps': ['每股收益', 'eps'],
+    'eps': ['每股收益', '每股盈利', 'eps'],
 }
 
 METRIC_FROM_CN = {v: k for k, arr in KEYWORDS.items() for v in arr}
@@ -121,6 +121,8 @@ def _unknown_company_mentions(question: str, companies: list[str]) -> list[str]:
         piece = re.sub(r'[\s\-—:：?？的年呢吗吧]+$', '', piece)
         if piece.startswith(('为什么', '怎么', '如何', '是否', '哪个', '多少', '能否', '可以', '这里', '最近', '今年', '去年', '财务', '经营', '年度', '总结', '摘要', '盈利能力', '的盈利', '盈利表现', '投资', '生成', '报表', '报告', '业务', '分析报告', '核心指标', '核心财务', '关键指标', '主要指标', '成长能力')):
             continue
+        if piece.startswith(('关键财务', '全部财务', '净资产回报率', '每股盈利')):
+            continue
         if piece not in stop and re.fullmatch(r'[\u4e00-\u9fffA-Za-z0-9]{2,30}', piece):
             candidates.append(piece)
     # A full company suffix is explicit even when it appears later in a sentence.
@@ -132,6 +134,8 @@ def _unknown_company_mentions(question: str, companies: list[str]) -> list[str]:
 
 
 def _detect_metrics(question: str) -> list[str]:
+    if _contains_any(question, ['核心财务指标', '关键财务指标', '全部财务指标', '财务数据一览', '财务指标总览']):
+        return list(KEYWORDS)
     hits = []
     for key, words in KEYWORDS.items():
         if _contains_any(question, words):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from core.qa_engine import KEYWORDS, parse_question, _extract_years, _detect_period, normalize_company_references
+from core.qa_engine import KEYWORDS, parse_question, _extract_years, _detect_period, _detect_metrics, normalize_company_references
 
 
 PRONOUNS = ['它', '那家公司', '这家公司', '另一家', '那个', '那家']
@@ -41,7 +41,7 @@ def _explicit_years(question: str) -> list[int]:
 
 
 def _explicit_metrics(question: str) -> list[str]:
-    return [key for key, aliases in KEYWORDS.items() if _contains_any(question, aliases)]
+    return _detect_metrics(question)
 
 
 def _company_alias(name: str) -> str:

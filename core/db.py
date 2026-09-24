@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from core.storage import ROOT, get_data_root, get_workspace, require_write_access
+from core.storage import ROOT, get_data_root, get_workspace, require_write_access, is_session_workspace
 
 DB_PATH = get_data_root() / 'investor_agent.db'
 _INITIAL_DB_PATH = DB_PATH
@@ -22,7 +22,7 @@ METRIC_UNITS = {'revenue': '亿元', 'net_profit': '亿元', 'operating_cashflow
 
 def get_db_path() -> Path:
     # A compatibility override must never redirect the isolated benchmark DB.
-    if get_workspace() != 'evaluation' and DB_PATH != _INITIAL_DB_PATH:
+    if get_workspace() != 'evaluation' and not is_session_workspace() and DB_PATH != _INITIAL_DB_PATH:
         return Path(DB_PATH)
     return get_data_root() / 'investor_agent.db'
 
@@ -78,6 +78,7 @@ def atomic_write():
 
 
 def init_db(*, migrate_legacy: bool = True) -> None:
+    migrate_legacy = migrate_legacy and not is_session_workspace()
     conn = get_conn()
     if conn.execute('PRAGMA user_version').fetchone()[0] >= 3:
         conn.close()

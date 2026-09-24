@@ -12,7 +12,7 @@ from core.db import insert_report_file, upsert_company, upsert_metric, get_conn,
 from core.import_validation import METRICS, NUMERIC_METRICS, validate_records
 from core.parsers import parse_pdf, parse_tabular
 from core.online_disclosure import download_pdf, COMPANY_CODE_MAP
-from core.storage import get_data_root, require_write_access
+from core.storage import get_data_root, require_write_access, is_session_workspace, check_session_upload_capacity
 
 ROOT = Path(__file__).resolve().parents[1]
 UPLOAD_DIR = get_data_root() / 'uploads'
@@ -20,11 +20,12 @@ _INITIAL_UPLOAD_DIR = UPLOAD_DIR
 
 
 def _upload_dir() -> Path:
-    return Path(UPLOAD_DIR) if UPLOAD_DIR != _INITIAL_UPLOAD_DIR else get_data_root() / 'uploads'
+    return Path(UPLOAD_DIR) if UPLOAD_DIR != _INITIAL_UPLOAD_DIR and not is_session_workspace() else get_data_root() / 'uploads'
 
 
 def save_upload(file_name: str, content: bytes, import_id: str | None = None) -> Path:
     require_write_access()
+    check_session_upload_capacity(len(content))
     safe_name = Path(str(file_name).replace('\\', '/')).name
     if safe_name in ('', '.', '..'):
         raise ValueError('文件名无效。')
